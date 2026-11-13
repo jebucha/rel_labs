@@ -12,6 +12,7 @@
     description: "20031 Inventory"
     source_path: "inventory/hosts.yml"
     source: "scm"
+    source_project: "rel_labs"
     inventory: "20031 Inventory"
     overwrite: true
     organization: "20031"
