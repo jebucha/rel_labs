@@ -1,6 +1,6 @@
 ---
 - name: Master playbook to build out elements in Ascender
-  hosts: ascender.jebucha.com
+  hosts: localhost
   tasks:
 
     - name: Include inventory task
