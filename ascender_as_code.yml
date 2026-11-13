@@ -1,6 +1,8 @@
 ---
 - name: Master playbook to build out elements in Ascender
   hosts: localhost
+  connection: local
+  gather_facts: false
   tasks:
 
     - name: Include inventory task
