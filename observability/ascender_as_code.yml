@@ -1,0 +1,7 @@
+---
+- name: Master playbook to build out elements in Ascender
+  hosts: ascender.jebucha.com
+  tasks:
+
+    - name: Create default inventory
+      awx.awx.inventory:

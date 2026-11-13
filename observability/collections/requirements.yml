@@ -1,0 +1,18 @@
+collections:
+  - name: amazon.aws
+    version: ">=6.5.0"
+  - name: azure.azcollection
+    version: ">=2.4.0"
+  - name: ansible.posix
+    version: ">=1.5.4"
+  - name: ctrliq.ascender
+    version: "25.6.3"
+  - name: community.docker
+    version: ">=3.7.0"
+  - name: community.general
+    version: ">=8.3.0"
+  - name: kubernetes.core
+    version: ">=2.4.0"
+  - name: community.aws
+    version: ">=11.0.0"
+
