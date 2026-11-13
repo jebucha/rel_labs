@@ -5,3 +5,19 @@
     description: "My Default Inventory"
     organization: "20031"
     state: present
+
+- name: Add 20031 inventory source
+  ctrliq.ascender.inventory_source:
+    name: "20031-source"
+    description: "20031 Inventory"
+    source_path: "inventory/hosts.yml"
+    inventory: "20031 Inventory"
+    overwrite: true
+    organization: "20031"
+    update_on_launch: true
+
+- name: Update 2003 inventory
+  ctrliq.ascender.inventory_source_update:
+    name: "20031 source"
+    inventory: "20031 Inventory"
+    organization: "20031"
