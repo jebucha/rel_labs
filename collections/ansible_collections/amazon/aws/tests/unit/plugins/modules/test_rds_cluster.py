@@ -1,0 +1,350 @@
+# (c) 2024 Red Hat Inc.
+#
+# This file is part of Ansible
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
+
+import copy
+from unittest.mock import MagicMock
+from unittest.mock import patch
+
+import pytest
+
+from ansible.module_utils.common.arg_spec import ArgumentSpecValidator
+
+from ansible_collections.amazon.aws.plugins.modules import rds_cluster
+
+mod_rds_cluster = "ansible_collections.amazon.aws.plugins.modules.rds_cluster"
+
+
+@pytest.fixture(name="ansible_module")
+def fixture_ansible_module():
+    module = MagicMock()
+    module.check_mode = False
+    module.params = {}
+    module.fail_json.side_effect = SystemExit(1)
+    module.fail_json_aws.side_effect = SystemExit(1)
+
+    return module
+
+
+class TestChangingClusterOptions:
+    def test_module_state(self, ansible_module):
+        apply_immediately = MagicMock()
+        db_cluster_id = MagicMock()
+        master_user_passwd = MagicMock()
+
+        modify_params = {
+            "ApplyImmediately": apply_immediately,
+            "DBClusterIdentifier": db_cluster_id,
+            "MasterUserPassword": master_user_passwd,
+        }
+        current_cluster = {
+            "DBClusterIdentifier": db_cluster_id,
+        }
+
+        # 'present' or 'absent'
+        for state in ("present", "absent"):
+            ansible_module.params.update({"state": state})
+            assert modify_params == rds_cluster.changing_cluster_options(
+                ansible_module, copy.deepcopy(modify_params), current_cluster
+            )
+
+        # 'stopped'/'started'
+        for state in ("started", "stopped"):
+            ansible_module.params.update({"state": state})
+            # 'mysql' or 'postgres' engine
+            for engine in ("mysql", "postgres"):
+                current_cluster.update({"Engine": engine})
+                with pytest.raises(SystemExit):
+                    rds_cluster.changing_cluster_options(ansible_module, copy.deepcopy(modify_params), current_cluster)
+                ansible_module.fail_json.assert_called_once_with(f"Only aurora clusters can use the state {state}")
+                ansible_module.fail_json.reset_mock()
+            # 'aurora' engine
+            current_cluster.update({"Engine": "aurora"})
+            assert {"DBClusterIdentifier": db_cluster_id} == rds_cluster.changing_cluster_options(
+                ansible_module, copy.deepcopy(modify_params), current_cluster
+            )
+
+    @pytest.mark.parametrize(
+        "params,expected",
+        [
+            ({"StorageType": "10B"}, {"StorageType": "10B"}),
+            ({"StorageType": "10B", "DeletionProtection": True}, {"StorageType": "10B", "DeletionProtection": True}),
+            ({"DeletionProtection": True}, {"DeletionProtection": True}),
+            ({"DeletionProtection": False}, {}),
+            ({"Domain": "domain-2"}, {"Domain": "domain-2"}),
+            ({"Domain": "domain-1", "DomainIAMRoleName": "ansible-test-units-001"}, {}),
+            (
+                {"Domain": "domain-2", "DomainIAMRoleName": "ansible-test-units-001"},
+                {"Domain": "domain-2", "DomainIAMRoleName": "ansible-test-units-001"},
+            ),
+            (
+                {"Domain": "domain-2", "DomainIAMRoleName": "ansible-test-units-002"},
+                {"Domain": "domain-2", "DomainIAMRoleName": "ansible-test-units-002"},
+            ),
+        ],
+    )
+    def test_modify_params(self, ansible_module, params, expected):
+        apply_immediately = MagicMock()
+        db_cluster_id = MagicMock()
+
+        modify_params = {
+            "ApplyImmediately": apply_immediately,
+            "DBClusterIdentifier": db_cluster_id,
+        }
+        if expected:
+            expected.update(modify_params)
+        modify_params.update(params)
+
+        current_cluster = {
+            "DBClusterIdentifier": db_cluster_id,
+            "DeletionProtection": False,
+            "DomainMemberships": [
+                {
+                    "Domain": "domain-1",
+                    "Status": "joined",
+                    "FQDN": "testing.ansible.units",
+                    "IAMRoleName": "ansible-test-units-001",
+                },
+            ],
+        }
+
+        # state is set to 'present'
+        ansible_module.params.update({"state": "present"})
+        assert expected == rds_cluster.changing_cluster_options(ansible_module, modify_params, current_cluster)
+
+    @pytest.mark.parametrize(
+        "modify_vpc_security_group_ids, current_vpc_security_group_ids, expected_vpc_security_group_ids",
+        [
+            (["id-1", "id-1", "id-2"], ["id-3"], ["id-1", "id-2"]),
+            (["id-1", "id-2"], ["id-1", "id-2"], ["id-1", "id-2"]),
+        ],
+    )
+    def test_vpc_security_group_ids_purge_true(
+        self,
+        ansible_module,
+        modify_vpc_security_group_ids,
+        current_vpc_security_group_ids,
+        expected_vpc_security_group_ids,
+    ):
+        db_cluster_id = MagicMock()
+        apply_immediately = MagicMock()
+        modify_params = {
+            "DBClusterIdentifier": db_cluster_id,
+            "ApplyImmediately": apply_immediately,
+        }
+        expected = {}
+        if expected_vpc_security_group_ids:
+            expected.update(modify_params)
+            expected["VpcSecurityGroupIds"] = expected_vpc_security_group_ids
+        modify_params.update({"VpcSecurityGroupIds": modify_vpc_security_group_ids})
+
+        current_cluster = {"VpcSecurityGroups": [{"VpcSecurityGroupId": x} for x in current_vpc_security_group_ids]}
+
+        # state is set to 'present'
+        ansible_module.params.update({"state": "present", "purge_security_groups": True})
+        assert expected == rds_cluster.changing_cluster_options(ansible_module, modify_params, current_cluster)
+
+    @pytest.mark.parametrize(
+        "modify_vpc_security_group_ids, current_vpc_security_group_ids, expected_vpc_security_group_ids",
+        [
+            (["id-1", "id-1", "id-2"], ["id-3"], ["id-1", "id-2", "id-3"]),
+            (["id-1", "id-2"], ["id-2", "id-1"], []),
+            (["id-1", "id-2"], ["id-2", "id-1", "id-3"], []),
+            (["id-1", "id-1", "id-2"], [], ["id-1", "id-2"]),
+        ],
+    )
+    def test_vpc_security_group_ids_purge_false(
+        self,
+        ansible_module,
+        modify_vpc_security_group_ids,
+        current_vpc_security_group_ids,
+        expected_vpc_security_group_ids,
+    ):
+        db_cluster_id = MagicMock()
+        apply_immediately = MagicMock()
+        modify_params = {
+            "DBClusterIdentifier": db_cluster_id,
+            "ApplyImmediately": apply_immediately,
+        }
+        expected = {}
+        if expected_vpc_security_group_ids:
+            expected.update(modify_params)
+            expected["VpcSecurityGroupIds"] = expected_vpc_security_group_ids
+        modify_params.update({"VpcSecurityGroupIds": modify_vpc_security_group_ids})
+
+        current_cluster = {"VpcSecurityGroups": [{"VpcSecurityGroupId": x} for x in current_vpc_security_group_ids]}
+
+        # state is set to 'present'
+        ansible_module.params.update({"state": "present", "purge_security_groups": False})
+        assert expected == rds_cluster.changing_cluster_options(ansible_module, modify_params, current_cluster)
+
+    @pytest.mark.parametrize(
+        "purge_cloudwatch_logs_exports, modify_enable_cloudwatch_logs_exports, current_enabled_cloudwatch_logs_exports, enable_log_types, disable_log_types",
+        [
+            (True, ["log-3", "log-2"], ["log-1"], ["log-2", "log-3"], ["log-1"]),
+            (False, ["log-3", "log-2"], ["log-1"], ["log-2", "log-3"], []),
+            (True, ["log-1", "log-2"], ["log-1", "log-2", "log-3"], [], ["log-3"]),
+            (False, ["log-1", "log-2"], ["log-1", "log-2", "log-3"], [], []),
+        ],
+    )
+    def test_enable_cloudwatch_logs_export(
+        self,
+        ansible_module,
+        purge_cloudwatch_logs_exports,
+        modify_enable_cloudwatch_logs_exports,
+        current_enabled_cloudwatch_logs_exports,
+        enable_log_types,
+        disable_log_types,
+    ):
+        db_cluster_id = MagicMock()
+        apply_immediately = MagicMock()
+        modify_params = {
+            "DBClusterIdentifier": db_cluster_id,
+            "ApplyImmediately": apply_immediately,
+            "EnableCloudwatchLogsExports": modify_enable_cloudwatch_logs_exports,
+        }
+        expected = None
+        if enable_log_types or disable_log_types:
+            expected = {"EnableLogTypes": enable_log_types, "DisableLogTypes": disable_log_types}
+
+        current_cluster = {"EnabledCloudwatchLogsExports": current_enabled_cloudwatch_logs_exports}
+
+        # state is set to 'present'
+        ansible_module.params.update(
+            {"state": "present", "purge_cloudwatch_logs_exports": purge_cloudwatch_logs_exports}
+        )
+        assert expected == rds_cluster.changing_cluster_options(ansible_module, modify_params, current_cluster).get(
+            "CloudwatchLogsExportConfiguration"
+        )
+
+    @pytest.mark.parametrize(
+        "new_cluster_id, current_cluster_id, expected_change",
+        [
+            ("", "cluster-id-1", False),
+            (None, "cluster-id-1", False),
+            ("cluster-id-1", "cluster-id-1", False),
+            ("cluster-id-2", "cluster-id-1", True),
+        ],
+    )
+    def test_modify_cluster_id(self, ansible_module, new_cluster_id, current_cluster_id, expected_change):
+        db_cluster_id = MagicMock()
+        apply_immediately = MagicMock()
+        modify_params = {
+            "DBClusterIdentifier": db_cluster_id,
+            "NewDBClusterIdentifier": new_cluster_id,
+            "ApplyImmediately": apply_immediately,
+        }
+        expected = {}
+        if expected_change:
+            expected.update(modify_params)
+
+        current_cluster = {"DBClusterIdentifier": current_cluster_id}
+
+        # state is set to 'present'
+        ansible_module.params.update({"state": "present"})
+        assert expected == rds_cluster.changing_cluster_options(ansible_module, modify_params, current_cluster)
+
+    @pytest.mark.parametrize(
+        "new_option_group_name, cluster_option_group_memberships, expected_change",
+        [
+            ("", [], False),
+            (None, [], False),
+            ("opt-3", ["opt-1", "opt-2", "opt-3"], False),
+            ("opt-3", ["opt-1", "opt-2"], True),
+        ],
+    )
+    def test_option_group_name(
+        self, ansible_module, new_option_group_name, cluster_option_group_memberships, expected_change
+    ):
+        db_cluster_id = MagicMock()
+        apply_immediately = MagicMock()
+        modify_params = {
+            "DBClusterIdentifier": db_cluster_id,
+            "OptionGroupName": new_option_group_name,
+            "ApplyImmediately": apply_immediately,
+        }
+        expected = {}
+        if expected_change:
+            expected.update(modify_params)
+
+        current_cluster = {
+            "DBClusterOptionGroupMemberships": [
+                {"DBClusterOptionGroupName": x} for x in cluster_option_group_memberships
+            ]
+        }
+
+        # state is set to 'present'
+        ansible_module.params.update({"state": "present"})
+        assert expected == rds_cluster.changing_cluster_options(ansible_module, modify_params, current_cluster)
+
+    @pytest.mark.parametrize(
+        "new_db_cluster_parameter_group_name, current_db_cluster_parameter_group_name, expected_change",
+        [
+            ("", "param-group-0", False),
+            (None, "param-group-0", False),
+            ("param-group-0", "param-group-0", False),
+            ("param-group-1", "param-group-0", True),
+        ],
+    )
+    def test_db_cluster_parameter_group_name(
+        self,
+        ansible_module,
+        new_db_cluster_parameter_group_name,
+        current_db_cluster_parameter_group_name,
+        expected_change,
+    ):
+        db_cluster_id = MagicMock()
+        apply_immediately = MagicMock()
+        modify_params = {
+            "DBClusterIdentifier": db_cluster_id,
+            "DBClusterParameterGroupName": new_db_cluster_parameter_group_name,
+            "ApplyImmediately": apply_immediately,
+        }
+        expected = {}
+        if expected_change:
+            expected.update(modify_params)
+
+        current_cluster = {"DBClusterParameterGroup": current_db_cluster_parameter_group_name}
+
+        # state is set to 'present'
+        ansible_module.params.update({"state": "present"})
+        assert expected == rds_cluster.changing_cluster_options(ansible_module, modify_params, current_cluster)
+
+
+@pytest.mark.parametrize("option_name", ["final_db_snapshot_identifier", "final_snapshot_identifier"])
+@patch(mod_rds_cluster + ".get_tags", return_value={})
+@patch(mod_rds_cluster + ".call_method")
+@patch(mod_rds_cluster + ".get_cluster")
+@patch(mod_rds_cluster + ".AnsibleAWSModule")
+def test_main_delete_cluster_with_final_snapshot(
+    m_AnsibleAWSModule, m_get_cluster, m_call_method, m_get_tags, ansible_module, option_name
+):
+    boto3 = pytest.importorskip("boto3")
+    module_args = {"db_cluster_identifier": "my-cluster", "state": "absent", option_name: "my-cluster-final"}
+
+    def build_module(**kwargs):
+        # Validate the module arguments against the real argument spec, as AnsibleModule would
+        result = ArgumentSpecValidator(kwargs["argument_spec"]).validate(module_args)
+        assert not result.error_messages
+        ansible_module.params = result.validated_parameters
+        return ansible_module
+
+    m_AnsibleAWSModule.side_effect = build_module
+    ansible_module.client.return_value = boto3.client(
+        "rds", region_name="us-east-1", aws_access_key_id="fake", aws_secret_access_key="fake"
+    )
+    m_get_cluster.return_value = {
+        "DBClusterIdentifier": "my-cluster",
+        "DBClusterArn": "arn:aws:rds:us-east-1:123456789012:cluster:my-cluster",
+        "Status": "available",
+        "Engine": "aurora-postgresql",
+    }
+
+    rds_cluster.main()
+
+    m_call_method.assert_called_once()
+    _client, _module, method_name, delete_params = m_call_method.call_args[0]
+    assert method_name == "delete_db_cluster"
+    assert delete_params["SkipFinalSnapshot"] is False
+    assert delete_params["FinalDBSnapshotIdentifier"] == "my-cluster-final"

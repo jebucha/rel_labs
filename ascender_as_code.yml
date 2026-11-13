@@ -3,5 +3,5 @@
   hosts: ascender.jebucha.com
   tasks:
 
-    - name: Create default inventory
-      awx.awx.inventory:
+    - name: Include inventory task
+      ansible.builtin.include_tasks: build_inventory.yml

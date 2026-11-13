@@ -1,0 +1,7 @@
+---
+- name: Create default inventory
+  ctrliq.ascender.inventory:
+    name: "20031 Inventory"
+    description: "My Default Inventory"
+    organization: "20031"
+    state: present

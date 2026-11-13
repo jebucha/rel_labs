@@ -1,0 +1,22 @@
+---
+name: changelog
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - labeled
+      - unlabeled
+      - synchronize
+    branches:
+      - main
+      - stable-*
+    tags:
+      - "*"
+jobs:
+  changelog:
+    uses: ansible-network/github_actions/.github/workflows/changelog.yml@4678c74a7d712d55e663c88f66eec6d9c3642550 # @main as of 2026-10-05

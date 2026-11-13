@@ -1,0 +1,20 @@
+---
+galaxy_info:
+  role_name: object_diff
+  author: Automation Iberia
+  description: AAP Configuration as Code - Desired State
+  company: Automation Iberia
+  license: GPL-3.0-or-later
+  min_ansible_version: 2.16.0
+  platforms:
+    - name: EL
+      versions:
+        - all
+  galaxy_tags: []
+
+collections:
+  - ctrliq.ascender
+
+dependencies:
+  - role: meta_dependency_check
+...

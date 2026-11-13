@@ -1,0 +1,116 @@
+[project]
+# Developer-environment metadata for uv; never built/published (tool.uv package = false).
+# Runtime/test deps stay out: requirements.txt, tests/{unit,integration}/requirements.txt.
+name = "amazon-aws"
+# uv requires a version even though this project is never packaged. Not mirrored
+# from galaxy.yml on purpose, so it doesn't need bumping every release.
+version = "0.0.0"
+description = "Developer toolchain for the amazon.aws Ansible collection"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+requires-python = ">=3.11"  # stable-12 requires ansible-core 2.18+, which supports Python 3.11+
+
+[dependency-groups]
+dev = [
+    "tox>=4.52.1",
+    "tox-uv-bare>=1.35.0",  # lets tox provision envs via uv instead of pip
+    "prek",
+]
+
+[tool.uv]
+package = false
+
+[tool.flake8]
+# Kept for flake8-cognitive-complexity (CCR001). Style linting is owned by ruff.
+show-source = true
+ignore = ["E123", "E125", "E203", "E402", "E501", "E741", "F401", "F811", "F841", "W503"]
+max-line-length = 160
+builtins = "_"
+exclude = [".tox", "tests/output"]
+
+[tool.mypy]
+disable_error_code = ["import-untyped"]
+
+[tool.ruff]
+# Pin exactly so a floating ruff release cannot widen the default ruleset under us.
+# Keep this in sync with tox [testenv:ruff*] deps and .pre-commit-config.yaml rev.
+required-version = "==0.16.9"
+line-length = 120
+exclude = [".tox", "tests/output"]
+
+[tool.ruff.lint]
+# Curated select = black/isort/flynt/flake8/pyflakes parity
+# Do not use ruff's version-dependent default ruleset.
+select = [
+    "E",     # pycodestyle errors (flake8)
+    "W",     # pycodestyle warnings (flake8)
+    "F",     # pyflakes (flake8)
+    "I",     # isort
+    "FLY",   # flynt
+    "UP031", # printf -> format/f-string (flynt-adjacent)
+    "UP032", # str.format -> f-string (flynt-adjacent)
+]
+# F401 re-exports use `import X as X` (or noqa for renamed aliases). unfixable is a
+# safety net so `ruff check --fix` cannot delete intentional re-exports.
+# Same-name aliases need pylint useless-import-alias silenced for ansible-test sanity.
+# E402: Ansible DOCUMENTATION/EXAMPLES/RETURN blocks above imports (validate-modules).
+# E501: line length owned by ruff format (line-length = 120).
+# E203/E741: carried from the previous flake8 ignore set (F811/F841 re-enabled).
+unfixable = ["F401"]
+ignore = [
+    "E203",
+    "E402",
+    "E501",
+    "E741",
+]
+
+[tool.ruff.lint.isort]
+# Ported from [tool.isort] so import grouping stays identical.
+force-single-line = true
+known-third-party = ["botocore", "boto3"]
+section-order = [
+    "future",
+    "standard-library",
+    "third-party",
+    "first-party",
+    "ansible-core",
+    "ansible-amazon-aws",
+    "ansible-community-aws",
+    "local-folder",
+]
+
+[tool.ruff.lint.isort.sections]
+ansible-core = ["ansible"]
+ansible-amazon-aws = ["ansible_collections.amazon.aws"]
+ansible-community-aws = ["ansible_collections.community.aws"]
+
+[tool.pylint.main]
+ignore = [".tox", "tests/output"]
+
+[tool.pytest.ini_options]
+xfail_strict = true
+markers = [
+    "limit_memory: Mark test with memory limit for pytest-memray",
+]
+
+[tool.coverage.run]
+source = [
+    "plugins/",
+    "extensions/",
+]
+relative_files = true
+
+[tool.coverage.report]
+exclude_also = [
+    # Don't complain if tests don't hit defensive assertion code:
+    "raise NotImplementedError",
+    # Handling for botocore not being available is performed by AnsibleAWSModule
+    "try:\n(    import botocore\n|    import boto3\n)*except ImportError:\n    pass",
+]
+include_namespace_packages = true
+
+[tool.coverage.html]
+directory = "coverage-report"
+
+[tool.coverage.xml]
+output = "coverage.xml"

@@ -1,0 +1,8 @@
+---
+{# Strip the $encrypted$ marker the API returns for secret settings, as before. #}
+controller_settings:
+  - settings:
+{% for key,value in all_settings[0].items() %}
+      {{ key | ctrliq.ascender.export_yaml }}: {{ ((value | string | replace('$encrypted$', '')) if value is string else value) | ctrliq.ascender.export_yaml }}
+{% endfor %}
+...

@@ -1,0 +1,361 @@
+# -*- coding: utf-8 -*-
+
+# Copyright (c) 2018 Ansible Project
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
+
+from __future__ import annotations
+
+DOCUMENTATION = r"""
+name: aws_rds
+short_description: RDS instance inventory source
+description:
+  - Get instances and clusters from Amazon Web Services RDS.
+  - Uses a YAML configuration file that ends with aws_rds.(yml|yaml).
+options:
+  regions:
+    description:
+      - A list of regions in which to describe RDS instances and clusters. Available regions are listed here
+        U(https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.RegionsAndAvailabilityZones.html).
+    default: []
+  filters:
+    description:
+      - A dictionary of filter value pairs. Available filters are listed here
+        U(https://docs.aws.amazon.com/cli/latest/reference/rds/describe-db-instances.html#options). If you filter by
+        db-cluster-id and I(include_clusters) is True it will apply to clusters as well.
+    default: {}
+  strict_permissions:
+    description:
+      - By default if an AccessDenied exception is encountered this plugin will fail. You can set strict_permissions to
+        False in the inventory config file which will allow the restrictions to be gracefully skipped.
+    type: bool
+    default: true
+  include_clusters:
+    description: Whether or not to query for Aurora clusters as well as instances.
+    type: bool
+    default: false
+  statuses:
+    description: A list of desired states for instances/clusters to be added to inventory. Set to ['all'] as a shorthand to find everything.
+    type: list
+    elements: str
+    default:
+      - creating
+      - available
+  hostvars_prefix:
+    description:
+      - The prefix for host variables names coming from AWS.
+    type: str
+    version_added: 3.1.0
+  hostvars_suffix:
+    description:
+      - The suffix for host variables names coming from AWS.
+    type: str
+    version_added: 3.1.0
+notes:
+  - Ansible versions prior to 2.10 should use the fully qualified plugin name 'amazon.aws.aws_rds'.
+  - The C(tags) host variable is deprecated and will be removed in a release after 2026-12-01.
+    Use C(rds_tags) instead to avoid conflicts with Ansible reserved variable names.
+  - The C(rds_tags) host variable was added in version 11.2.0.
+extends_documentation_fragment:
+  - inventory_cache
+  - constructed
+  - amazon.aws.boto3
+  - amazon.aws.common.plugins
+  - amazon.aws.region.plugins
+  - amazon.aws.assume_role.plugins
+author:
+  - Sloane Hertel (@s-hertel)
+"""
+
+EXAMPLES = r"""
+plugin: aws_rds
+regions:
+  - us-east-1
+  - ca-central-1
+keyed_groups:
+  - key: 'db_parameter_groups|json_query("[].db_parameter_group_name")'
+    prefix: rds_parameter_group
+  - key: engine
+    prefix: rds
+  - key: rds_tags
+  - key: region
+hostvars_prefix: aws_
+hostvars_suffix: _rds
+"""
+
+import typing
+
+if typing.TYPE_CHECKING:
+    from typing import Any
+    from typing import Callable
+
+from ansible.module_utils.common.dict_transformations import camel_dict_to_snake_dict
+
+from ansible_collections.amazon.aws.plugins.module_utils.retries import AWSRetry
+from ansible_collections.amazon.aws.plugins.module_utils.tagging import boto3_tag_list_to_ansible_dict
+from ansible_collections.amazon.aws.plugins.module_utils.transformation import ansible_dict_to_boto3_filter_list
+from ansible_collections.amazon.aws.plugins.plugin_utils.inventory import AnsibleInventoryPermissionsError
+from ansible_collections.amazon.aws.plugins.plugin_utils.inventory import AWSInventoryBase
+from ansible_collections.amazon.aws.plugins.plugin_utils.inventory import InventoryErrorHandler
+
+
+def _find_hosts_with_valid_statuses(hosts: list, statuses: list) -> list:
+    """
+    Filter RDS hosts by their current status.
+
+    :param hosts: List of RDS DB instances or clusters
+    :param statuses: List of desired statuses (or ['all'] for all hosts)
+    :return: Filtered list of hosts matching the desired statuses
+    """
+    if "all" in statuses:
+        return hosts
+    valid_hosts = []
+    for host in hosts:
+        if host.get("DBInstanceStatus") in statuses:
+            valid_hosts.append(host)
+        elif host.get("Status") in statuses:
+            valid_hosts.append(host)
+    return valid_hosts
+
+
+def _get_rds_hostname(host: dict) -> str:
+    """
+    Extract the hostname identifier from an RDS host.
+
+    :param host: RDS DB instance or cluster dictionary
+    :return: DBInstanceIdentifier for instances or DBClusterIdentifier for clusters
+    """
+    if host.get("DBInstanceIdentifier"):
+        return host["DBInstanceIdentifier"]
+    return host["DBClusterIdentifier"]
+
+
+@InventoryErrorHandler.list_error_handler("list tags for RDS resource", default_value=[])
+@AWSRetry.jittered_backoff()
+def _get_tags_for_resource(connection, resource_arn):
+    """
+    Retrieve tags for an RDS resource.
+
+    :param connection: boto3 client for RDS
+    :param resource_arn: ARN of the RDS resource
+    :return: List of tags (empty list if resource not found)
+    """
+    return connection.list_tags_for_resource(ResourceName=resource_arn)["TagList"]
+
+
+def _add_tags_for_rds_hosts(connection: Any, hosts: list, strict: bool) -> None:
+    """
+    Add tags to RDS hosts, handling permission errors based on strict mode.
+
+    :param connection: boto3 client for RDS
+    :param hosts: List of RDS host dictionaries
+    :param strict: If True, raise on permission errors; if False, set empty tags
+    """
+    for host in hosts:
+        if "DBInstanceArn" in host:
+            resource_arn = host["DBInstanceArn"]
+        else:
+            resource_arn = host["DBClusterArn"]
+
+        try:
+            tags = _get_tags_for_resource(connection, resource_arn)
+        except AnsibleInventoryPermissionsError:
+            if strict:
+                raise
+            tags = []
+
+        host["Tags"] = tags
+
+
+def describe_resource_with_tags(func: Callable) -> Callable:
+    """
+    Decorator that extracts DB instances/clusters from API results and adds tags.
+
+    Handles permission errors from describe operations based on strict mode.
+
+    :param func: Function that returns describe_db_instances or describe_db_clusters result
+    :return: Wrapped function that extracts list and adds tags
+    """
+
+    def describe_wrapper(connection: Any, filters: Any, strict: bool = False) -> list:
+        try:
+            results = func(connection=connection, filters=filters)
+            if "DBInstances" in results:
+                results = results["DBInstances"]
+            else:
+                results = results["DBClusters"]
+            _add_tags_for_rds_hosts(connection, results, strict)
+        except AnsibleInventoryPermissionsError:
+            if not strict:
+                return []
+            raise
+
+        return results
+
+    return describe_wrapper
+
+
+@describe_resource_with_tags
+@InventoryErrorHandler.common_error_handler("describe RDS DB instances")
+def _describe_db_instances(connection, filters):
+    """
+    Describe RDS DB instances using the given boto3 RDS client.
+
+    :param connection: boto3 client for RDS
+    :param filters: List of filters to apply to the describe operation
+    :return: Dictionary containing DB instances
+    """
+    paginator = connection.get_paginator("describe_db_instances")
+    return paginator.paginate(Filters=filters).build_full_result()
+
+
+@describe_resource_with_tags
+@InventoryErrorHandler.common_error_handler("describe RDS DB clusters")
+@AWSRetry.jittered_backoff()
+def _describe_db_clusters(connection, filters):
+    """
+    Describe RDS DB clusters using the given boto3 RDS client.
+
+    :param connection: boto3 client for RDS
+    :param filters: List of filters to apply to the describe operation
+    :return: Dictionary containing DB clusters
+    """
+    return connection.describe_db_clusters(Filters=filters)
+
+
+class InventoryModule(AWSInventoryBase):
+    NAME = "amazon.aws.aws_rds"
+    INVENTORY_FILE_SUFFIXES = ("aws_rds.yml", "aws_rds.yaml")
+
+    def __init__(self):
+        super().__init__()
+        self.credentials = {}
+
+    def _populate(self, hosts):
+        group = "aws_rds"
+        self.inventory.add_group(group)
+        if hosts:
+            self._add_hosts(hosts=hosts, group=group)
+            self.inventory.add_child("all", group)
+
+    def _populate_from_source(self, source_data):
+        hostvars = source_data.pop("_meta", {}).get("hostvars", {})
+        for group in source_data:
+            if group == "all":
+                continue
+            self.inventory.add_group(group)
+            hosts = source_data[group].get("hosts", [])
+            for host in hosts:
+                self._populate_host_vars([host], hostvars.get(host, {}), group)
+            self.inventory.add_child("all", group)
+
+    def _format_inventory(self, hosts):
+        results = {"_meta": {"hostvars": {}}}
+        group = "aws_rds"
+        results[group] = {"hosts": []}
+        for host in hosts:
+            hostname = _get_rds_hostname(host)
+            results[group]["hosts"].append(hostname)
+            h = self.inventory.get_host(hostname)
+            results["_meta"]["hostvars"][h.name] = h.vars
+        return results
+
+    def _add_hosts(self, hosts, group):
+        """
+        :param hosts: a list of hosts to be added to a group
+        :param group: the name of the group to which the hosts belong
+        """
+        for host in hosts:
+            hostname = _get_rds_hostname(host)
+            host = camel_dict_to_snake_dict(host, ignore_list=["Tags"])
+            host["rds_tags"] = boto3_tag_list_to_ansible_dict(host.get("tags", []))
+            # rds_tags is the new key, tags is deprecated but kept for backward compatibility
+            host["tags"] = host["rds_tags"]
+
+            # Allow easier grouping by region
+            if "availability_zone" in host:
+                host["region"] = host["availability_zone"][:-1]
+            elif "availability_zones" in host:
+                host["region"] = host["availability_zones"][0][:-1]
+
+            self.inventory.add_host(hostname, group=group)
+            hostvars_prefix = self.get_option("hostvars_prefix")
+            hostvars_suffix = self.get_option("hostvars_suffix")
+            new_vars = dict()
+            for hostvar, hostval in host.items():
+                if hostvars_prefix:
+                    hostvar = hostvars_prefix + hostvar
+                if hostvars_suffix:
+                    hostvar = hostvar + hostvars_suffix
+                new_vars[hostvar] = hostval
+                self.inventory.set_variable(hostname, hostvar, hostval)
+            host.update(new_vars)
+
+            # Use constructed if applicable
+            strict = self.get_option("strict")
+            # Composed variables
+            self._set_composite_vars(self.get_option("compose"), host, hostname, strict=strict)
+            # Complex groups based on jinja2 conditionals, hosts that meet the conditional are added to group
+            self._add_host_to_composed_groups(self.get_option("groups"), host, hostname, strict=strict)
+            # Create groups based on variable values and add the corresponding hosts to it
+            self._add_host_to_keyed_groups(self.get_option("keyed_groups"), host, hostname, strict=strict)
+
+    def _get_all_db_hosts(self, regions, instance_filters, cluster_filters, strict, statuses, gather_clusters=False):
+        """
+        :param regions: a list of regions in which to describe hosts
+        :param instance_filters: a list of boto3 filter dictionaries
+        :param cluster_filters: a list of boto3 filter dictionaries
+        :param strict: a boolean determining whether to fail or ignore 403 error codes
+        :param statuses: a list of statuses that the returned hosts should match
+        :return A list of host dictionaries
+        """
+        all_instances = []
+        all_clusters = []
+
+        for connection, _region in self.all_clients("rds"):
+            all_instances += _describe_db_instances(connection, instance_filters, strict=strict)
+            if gather_clusters:
+                all_clusters += _describe_db_clusters(connection, cluster_filters, strict=strict)
+        sorted_hosts = list(
+            sorted(all_instances, key=lambda x: x["DBInstanceIdentifier"])
+            + sorted(all_clusters, key=lambda x: x["DBClusterIdentifier"])
+        )
+        return _find_hosts_with_valid_statuses(sorted_hosts, statuses)
+
+    def parse(self, inventory, loader, path, cache=True):
+        super().parse(inventory, loader, path, cache=cache)
+
+        self.display.deprecated(
+            "The 'tags' host variable is deprecated. Use 'rds_tags' instead.",
+            date="2026-12-01",
+            collection_name="amazon.aws",
+        )
+
+        # get user specifications
+        regions = self.get_option("regions")
+        filters = self.get_option("filters")
+        strict_permissions = self.get_option("strict_permissions")
+        statuses = self.get_option("statuses")
+        include_clusters = self.get_option("include_clusters")
+        instance_filters = ansible_dict_to_boto3_filter_list(filters)
+        cluster_filters = []
+        if "db-cluster-id" in filters and include_clusters:
+            cluster_filters = ansible_dict_to_boto3_filter_list({"db-cluster-id": filters["db-cluster-id"]})
+
+        result_was_cached, cached_result = self.get_cached_result(path, cache)
+        if result_was_cached:
+            self._populate_from_source(cached_result)
+            return
+
+        results = self._get_all_db_hosts(
+            regions,
+            instance_filters,
+            cluster_filters,
+            strict_permissions,
+            statuses,
+            include_clusters,
+        )
+        self._populate(results)
+
+        # Update the cache once we're done
+        formatted_inventory = self._format_inventory(results)
+        self.update_cached_result(path, cache, formatted_inventory)

@@ -1,0 +1,601 @@
+#!/usr/bin/python
+
+# (c) 2020, John Westcott IV <john.westcott.iv@redhat.com>
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
+
+DOCUMENTATION = '''
+---
+module: workflow_job_template_node
+author: "John Westcott IV (@john-westcott-iv)"
+short_description: create, update, or destroy Ascender workflow job template nodes.
+description:
+    - Create, update, or destroy Ascender workflow job template nodes.
+    - Use this to build a graph for a workflow, which dictates what the workflow runs.
+    - You can create nodes first, and link them afterwards, and not worry about ordering.
+      For failsafe referencing of a node, specify identifier, WFJT, and organization.
+      With those specified, you can choose to modify or not modify any other parameter.
+options:
+    extra_data:
+      description:
+        - Variables to apply at launch time.
+        - Will only be accepted if job template prompts for vars or has a survey asking for those vars.
+      type: dict
+    inventory:
+      description:
+        - Name, ID, or named URL of the Inventory applied as a prompt, if job template prompts for inventory
+      type: str
+    scm_branch:
+      description:
+        - SCM branch applied as a prompt, if job template prompts for SCM branch
+      type: str
+    job_type:
+      description:
+        - Job type applied as a prompt, if job template prompts for job type
+      type: str
+      choices:
+        - 'run'
+        - 'check'
+    job_tags:
+      description:
+        - Job tags applied as a prompt, if job template prompts for job tags
+      type: str
+    skip_tags:
+      description:
+        - Tags to skip, applied as a prompt, if job template prompts for job tags
+      type: str
+    limit:
+      description:
+        - Limit to act on, applied as a prompt, if job template prompts for limit
+      type: str
+    diff_mode:
+      description:
+        - Run diff mode, applied as a prompt, if job template prompts for diff mode
+      type: bool
+    verbosity:
+      description:
+        - Verbosity applied as a prompt, if job template prompts for verbosity
+      type: int
+      choices:
+        - 0
+        - 1
+        - 2
+        - 3
+        - 4
+        - 5
+    workflow_job_template:
+      description:
+        - The workflow job template name, ID, or named URL the node exists in.
+        - Used for looking up the node, cannot be modified after creation.
+      required: True
+      type: str
+      aliases:
+        - workflow
+    organization:
+      description:
+        - The organization name, ID, or named URL of the workflow job template the node exists in.
+        - Used for looking up the workflow, not a direct model field.
+      type: str
+    unified_job_template:
+      description:
+        - Name of unified job template to run in the workflow.
+        - Can be a job template, project, inventory source, etc.
+        - Omit if creating an approval node.
+        - This parameter is mutually exclusive with C(approval_node).
+      type: str
+    lookup_organization:
+      description:
+        - Organization name, ID, or named URL the inventories, job template, project, inventory source the unified_job_template exists in.
+        - If not provided, will lookup by name only, which does not work with duplicates.
+      type: str
+    approval_node:
+      description:
+        - A dictionary of Name, description, and timeout values for the approval node.
+        - This parameter is mutually exclusive with C(unified_job_template).
+      type: dict
+      suboptions:
+        name:
+          description:
+            - Name of this workflow approval template.
+          type: str
+          required: True
+        description:
+          description:
+            - Optional description of this workflow approval template.
+          type: str
+        timeout:
+          description:
+            - The amount of time (in seconds) before the approval node expires and fails.
+          type: int
+        context_template:
+          description:
+            - A Jinja2 template string rendered at runtime into a context message using upstream set_stats artifacts.
+          type: str
+        required_approvals:
+          description:
+            - The number of approvals required before the approval node passes.
+            - Defaults to 1 if not specified.
+          type: int
+        on_timeout:
+          description:
+            - The action taken when the approval node times out.
+          type: str
+          choices:
+            - deny
+            - approve
+    all_parents_must_converge:
+      description:
+        - If enabled then the node will only run if all of the parent nodes have met the criteria to reach this node
+      type: bool
+    identifier:
+      description:
+        - An identifier for this node that is unique within its workflow.
+        - It is copied to workflow job nodes corresponding to this node.
+      required: True
+      type: str
+    always_nodes:
+      description:
+        - Nodes that will run after this node completes.
+        - List of node identifiers.
+      type: list
+      elements: str
+    success_nodes:
+      description:
+        - Nodes that will run after this node on success.
+        - List of node identifiers.
+      type: list
+      elements: str
+    failure_nodes:
+      description:
+        - Nodes that will run after this node on failure.
+        - List of node identifiers.
+      type: list
+      elements: str
+    condition_nodes:
+      description:
+        - Nodes that will run after this node when a specified condition is met.
+        - Each entry is a dictionary specifying the target node identifier and the condition to evaluate.
+        - Conditions are evaluated against artifacts set by upstream nodes using C(set_stats).
+      type: list
+      elements: dict
+      suboptions:
+        identifier:
+          description:
+            - The identifier of the target node within the same workflow.
+          type: str
+          required: True
+        trigger:
+          description:
+            - When to evaluate the condition relative to this node's completion status.
+          type: str
+          choices:
+            - success
+            - failure
+            - always
+          default: success
+        artifact_key:
+          description:
+            - The key in the upstream artifacts (set via C(set_stats)) to evaluate.
+          type: str
+          required: True
+        operator:
+          description:
+            - The comparison operator to apply.
+            - The controller only evaluates equality, so C(eq) matches when the artifact value equals C(expected_value), and C(ne) matches when it does not.
+          type: str
+          choices:
+            - eq
+            - ne
+          default: eq
+        expected_value:
+          description:
+            - The value to compare the artifact against.
+          type: raw
+          required: True
+    credentials:
+      description:
+        - Credential names, IDs, or named URLs to be applied to job as launch-time prompts.
+        - List of credential names, IDs, or named URLs.
+        - Uniqueness is not handled rigorously.
+      type: list
+      elements: str
+    execution_environment:
+      description:
+        - Execution Environment name, ID, or named URL applied as a prompt, assuming job template prompts for execution environment
+      type: str
+    forks:
+      description:
+        - Forks applied as a prompt, assuming job template prompts for forks
+      type: int
+    instance_groups:
+      description:
+        - List of Instance Group names, IDs, or named URLs applied as a prompt, assuming job template prompts for instance groups
+      type: list
+      elements: str
+    job_slice_count:
+      description:
+        - Job Slice Count applied as a prompt, assuming job template prompts for job slice count
+      type: int
+    labels:
+      description:
+        - List of labels applied as a prompt, assuming job template prompts for labels
+      type: list
+      elements: str
+    timeout:
+      description:
+        - Timeout applied as a prompt, assuming job template prompts for timeout
+      type: int
+    max_retries:
+      description:
+        - Maximum number of times this node's job is automatically retried after failing before its failure paths are followed.
+        - Canceled jobs are never retried.
+      type: int
+    state:
+      description:
+        - Desired state of the resource.
+      choices: ["present", "absent", "exists"]
+      default: "present"
+      type: str
+extends_documentation_fragment: ctrliq.ascender.auth
+'''
+
+EXAMPLES = '''
+- name: Create a node, follows workflow_job_template example
+  ctrliq.ascender.workflow_job_template_node:
+    identifier: my-first-node
+    workflow: example-workflow
+    unified_job_template: jt-for-node-use
+    organization: Default  # organization of workflow job template
+    extra_data:
+      foo_key: bar_value
+
+- name: Create parent node for prior node
+  ctrliq.ascender.workflow_job_template_node:
+    identifier: my-root-node
+    workflow: example-workflow
+    unified_job_template: jt-for-node-use
+    organization: Default
+    success_nodes:
+      - my-first-node
+
+- name: Create workflow with 2 Job Templates and an approval node in between
+  block:
+    - name: Create a workflow job template
+      ctrliq.ascender.workflow_job_template:
+        name: my-workflow-job-template
+        ask_scm_branch_on_launch: true
+        organization: Default
+
+    - name: Create 1st node
+      ctrliq.ascender.workflow_job_template_node:
+        identifier: my-first-node
+        workflow_job_template: my-workflow-job-template
+        unified_job_template: some_job_template
+        organization: Default
+
+    - name: Create 2nd approval node
+      ctrliq.ascender.workflow_job_template_node:
+        identifier: my-second-approval-node
+        workflow_job_template: my-workflow-job-template
+        organization: Default
+        approval_node:
+          description: "Do this?"
+          name: my-second-approval-node
+          timeout: 3600
+
+    - name: Create 3rd node
+      ctrliq.ascender.workflow_job_template_node:
+        identifier: my-third-node
+        workflow_job_template: my-workflow-job-template
+        unified_job_template: some_other_job_template
+        organization: Default
+
+    - name: Link 1st node to 2nd Approval node
+      ctrliq.ascender.workflow_job_template_node:
+        identifier: my-first-node
+        workflow_job_template: my-workflow-job-template
+        organization: Default
+        success_nodes:
+          - my-second-approval-node
+
+    - name: Link 2nd Approval Node 3rd node
+      ctrliq.ascender.workflow_job_template_node:
+        identifier: my-second-approval-node
+        workflow_job_template: my-workflow-job-template
+        organization: Default
+        success_nodes:
+          - my-third-node
+
+- name: Create an approval node with a context template
+  ctrliq.ascender.workflow_job_template_node:
+    identifier: my-approval-node
+    workflow_job_template: my-workflow-job-template
+    organization: Default
+    approval_node:
+      name: review-deployment
+      description: "Review the deployment details before approving"
+      timeout: 3600
+      context_template: "Deploying {{ artifacts.project_name }} version {{ artifacts.version }}"
+
+- name: Create an approval node requiring multiple approvals
+  ctrliq.ascender.workflow_job_template_node:
+    identifier: my-quorum-approval-node
+    workflow_job_template: my-workflow-job-template
+    organization: Default
+    approval_node:
+      name: production-deploy-approval
+      description: "Requires sign-off from two team members"
+      timeout: 7200
+      required_approvals: 2
+      on_timeout: deny
+
+- name: Create a conditional workflow path based on artifacts
+  ctrliq.ascender.workflow_job_template_node:
+    identifier: my-check-node
+    workflow_job_template: my-workflow-job-template
+    unified_job_template: run-tests
+    organization: Default
+    condition_nodes:
+      - identifier: deploy-staging
+        trigger: success
+        artifact_key: test_result
+        operator: eq
+        expected_value: passed
+      - identifier: notify-failure
+        trigger: success
+        artifact_key: test_result
+        operator: ne
+        expected_value: passed
+'''
+
+RETURN = '''
+id:
+    description: The numeric database ID of the workflow job template node.
+    returned: on successful create or update
+    type: int
+    sample: 42
+'''
+
+from ..module_utils.controller_api import ControllerAPIModule
+
+
+def main():
+    # Any additional arguments that are not fields of the item can be added here
+    argument_spec = dict(
+        identifier=dict(required=True),
+        workflow_job_template=dict(required=True, aliases=['workflow']),
+        organization=dict(),
+        extra_data=dict(type='dict'),
+        inventory=dict(),
+        scm_branch=dict(),
+        job_type=dict(choices=['run', 'check']),
+        job_tags=dict(),
+        skip_tags=dict(),
+        limit=dict(),
+        diff_mode=dict(type='bool'),
+        verbosity=dict(type='int', choices=[0, 1, 2, 3, 4, 5]),
+        unified_job_template=dict(),
+        lookup_organization=dict(),
+        approval_node=dict(type='dict'),
+        all_parents_must_converge=dict(type='bool'),
+        success_nodes=dict(type='list', elements='str'),
+        always_nodes=dict(type='list', elements='str'),
+        failure_nodes=dict(type='list', elements='str'),
+        condition_nodes=dict(
+            type='list',
+            elements='dict',
+            options=dict(
+                identifier=dict(required=True),
+                trigger=dict(choices=['success', 'failure', 'always'], default='success'),
+                artifact_key=dict(required=True, no_log=False),
+                operator=dict(choices=['eq', 'ne'], default='eq'),
+                expected_value=dict(type='raw', required=True),
+            ),
+        ),
+        credentials=dict(type='list', elements='str'),
+        execution_environment=dict(type='str'),
+        forks=dict(type='int'),
+        instance_groups=dict(type='list', elements='str'),
+        job_slice_count=dict(type='int'),
+        labels=dict(type='list', elements='str'),
+        timeout=dict(type='int'),
+        max_retries=dict(type='int'),
+        state=dict(choices=['present', 'absent', 'exists'], default='present'),
+    )
+    mutually_exclusive = [("unified_job_template", "approval_node")]
+    required_if = [
+        ['state', 'absent', ['identifier']],
+        ['state', 'present', ['identifier']],
+        ['state', 'present', ['unified_job_template', 'approval_node', 'success_nodes', 'always_nodes', 'failure_nodes', 'condition_nodes'], True],
+    ]
+
+    # Create a module for ourselves
+    module = ControllerAPIModule(
+        argument_spec=argument_spec,
+        mutually_exclusive=mutually_exclusive,
+        required_if=required_if,
+    )
+
+    # Extract our parameters
+    identifier = module.params.get('identifier')
+    state = module.params.get('state')
+    approval_node = module.params.get('approval_node')
+    new_fields = {}
+    lookup_organization = module.params.get('lookup_organization')
+    search_fields = {'identifier': identifier}
+
+    # Attempt to look up the related items the user specified (these will fail the module if not found)
+    workflow_job_template = module.params.get('workflow_job_template')
+    workflow_job_template_id = None
+    if workflow_job_template:
+        wfjt_search_fields = {}
+        organization = module.params.get('organization')
+        if organization:
+            organization_id = module.resolve_name_to_id('organizations', organization)
+            wfjt_search_fields['organization'] = organization_id
+        wfjt_data = module.get_one('workflow_job_templates', name_or_id=workflow_job_template, **{'data': wfjt_search_fields})
+        if wfjt_data is None:
+            # A workflow that does not exist cannot have nodes, so removing one is already done.
+            if state == 'absent':
+                module.exit_json(**module.json_output)
+            else:
+                module.fail_json(
+                    msg=f"The workflow {workflow_job_template} in organization {organization} was not found on the controller instance server"
+                )
+        workflow_job_template_id = wfjt_data['id']
+        search_fields['workflow_job_template'] = new_fields['workflow_job_template'] = workflow_job_template_id
+
+    # Attempt to look up an existing item based on the provided data
+    existing_item = module.get_one('workflow_job_template_nodes', check_exists=(state == 'exists'), **{'data': search_fields})
+
+    if state == 'absent':
+        # If the state was absent we can let the module delete it if needed, the module will handle exiting from this
+        module.delete_if_needed(existing_item)
+
+    # Set lookup data to use
+    search_fields = {}
+    if lookup_organization:
+        search_fields['organization'] = module.resolve_name_to_id('organizations', lookup_organization)
+
+    unified_job_template = module.params.get('unified_job_template')
+    if unified_job_template:
+        new_fields['unified_job_template'] = module.get_one(
+            'unified_job_templates', name_or_id=unified_job_template, allow_none=False, **{'data': search_fields}
+        )['id']
+    inventory = module.params.get('inventory')
+    if inventory is not None:
+        if inventory == '':
+            new_fields['inventory'] = ''
+        else:
+            new_fields['inventory'] = module.resolve_name_to_id('inventories', inventory)
+
+    # Create the data that gets sent for create and update
+    for field_name in (
+        'identifier',
+        'extra_data',
+        'scm_branch',
+        'job_type',
+        'job_tags',
+        'skip_tags',
+        'limit',
+        'diff_mode',
+        'verbosity',
+        'all_parents_must_converge',
+        'forks',
+        'job_slice_count',
+        'timeout',
+        'max_retries',
+    ):
+        field_val = module.params.get(field_name)
+        if field_val is not None:
+            new_fields[field_name] = field_val
+
+    association_fields = {}
+    for association in ('always_nodes', 'success_nodes', 'failure_nodes', 'credentials', 'instance_groups', 'labels'):
+        name_list = module.params.get(association)
+        if name_list is None:
+            continue
+        id_list = []
+        for sub_name in name_list:
+            if association in ['credentials', 'instance_groups', 'labels']:
+                sub_obj = module.get_one(association, name_or_id=sub_name)
+            else:
+                endpoint = 'workflow_job_template_nodes'
+                lookup_data = {'identifier': sub_name}
+                if workflow_job_template_id:
+                    lookup_data['workflow_job_template'] = workflow_job_template_id
+                sub_obj = module.get_one(endpoint, **{'data': lookup_data})
+            if sub_obj is None:
+                module.fail_json(msg=f'Could not find {association} entry with name {sub_name}')
+            id_list.append(sub_obj['id'])
+        association_fields[association] = id_list
+
+    execution_environment = module.params.get('execution_environment')
+    if execution_environment is not None:
+        if execution_environment == '':
+            new_fields['execution_environment'] = ''
+        else:
+            ee = module.get_one('execution_environments', name_or_id=execution_environment)
+            if ee is None:
+                module.fail_json(msg=f'could not find execution_environment entry with name {execution_environment}')
+            else:
+                new_fields['execution_environment'] = ee['id']
+
+    # In the case of a new object, the utils need to know it is a node
+    new_fields['type'] = 'workflow_job_template_node'
+
+    # Handle condition_nodes association (requires per-edge metadata, can't use modify_associations)
+    condition_nodes = module.params.get('condition_nodes')
+
+    # If the state was present and we can let the module build or update the existing item, this will return on its own
+    module.create_or_update_if_needed(
+        existing_item,
+        new_fields,
+        endpoint='workflow_job_template_nodes',
+        item_type='workflow_job_template_node',
+        auto_exit=not approval_node and condition_nodes is None,
+        associations=association_fields,
+    )
+
+    if condition_nodes is not None:
+        # Get the created/updated node
+        search_fields_cn = {'identifier': identifier, 'workflow_job_template': workflow_job_template_id}
+        current_node = module.get_one('workflow_job_template_nodes', **{'data': search_fields_cn})
+
+        # Build desired condition list with resolved node IDs
+        desired_conditions = []
+        for cn in condition_nodes:
+            cn_lookup = {'identifier': cn['identifier']}
+            if workflow_job_template_id:
+                cn_lookup['workflow_job_template'] = workflow_job_template_id
+            target_node = module.get_one('workflow_job_template_nodes', **{'data': cn_lookup})
+            if target_node is None:
+                module.fail_json(msg=f"Could not find condition_nodes entry with identifier {cn['identifier']}")
+            desired_conditions.append(module.build_condition_node(target_node['id'], cn))
+
+        module.modify_condition_node_associations(current_node, desired_conditions)
+
+        if not approval_node:
+            module.exit_json(**module.json_output)
+
+    # Create approval node unified template or update existing
+    if approval_node:
+        # Set Approval Fields
+        new_fields = {}
+
+        # Extract Parameters
+        if approval_node.get('name') is None:
+            module.fail_json(msg="Approval node name is required to create approval node.")
+        if approval_node.get('name') is not None:
+            new_fields['name'] = approval_node['name']
+        if approval_node.get('description') is not None:
+            new_fields['description'] = approval_node['description']
+        if approval_node.get('timeout') is not None:
+            new_fields['timeout'] = approval_node['timeout']
+        if approval_node.get('context_template') is not None:
+            new_fields['context_template'] = approval_node['context_template']
+        if approval_node.get('required_approvals') is not None:
+            new_fields['required_approvals'] = approval_node['required_approvals']
+        if approval_node.get('on_timeout') is not None:
+            new_fields['on_timeout'] = approval_node['on_timeout']
+
+        # Find created workflow node ID
+        search_fields = {'identifier': identifier}
+        search_fields['workflow_job_template'] = workflow_job_template_id
+        workflow_job_template_node = module.get_one('workflow_job_template_nodes', **{'data': search_fields})
+        workflow_job_template_node_id = workflow_job_template_node['id']
+        module.json_output['workflow_node_id'] = workflow_job_template_node_id
+        existing_item = None
+        # Due to not able to lookup workflow_approval_templates, find the existing item in another place
+        if workflow_job_template_node['related'].get('unified_job_template') is not None:
+            related_ujt = module.get_endpoint(workflow_job_template_node['related']['unified_job_template'])['json']
+            if related_ujt.get('type') == 'workflow_approval_template':
+                existing_item = related_ujt
+        approval_endpoint = f'workflow_job_template_nodes/{workflow_job_template_node_id}/create_approval_template/'
+        module.create_or_update_if_needed(
+            existing_item, new_fields, endpoint=approval_endpoint, item_type='workflow_job_template_approval_node', associations=None
+        )
+    module.exit_json(**module.json_output)
+
+
+if __name__ == '__main__':
+    main()

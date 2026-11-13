@@ -1,0 +1,10 @@
+# Our code is based on the AWS SDKs
+botocore
+boto3
+
+placebo
+# For testing eda event source plugins
+aiobotocore[botocore]
+
+asyncmock
+pytest-asyncio
