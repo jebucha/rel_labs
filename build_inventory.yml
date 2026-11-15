@@ -11,36 +11,50 @@
 # by a visibility wait that polls the list view (30 attempts x 2s) before the
 # next task looks the object up by name.
 #
-# The poll predicate lives in `until`, not in the task arguments: Ansible
-# re-templates `until` on every attempt but templates task arguments only once,
-# so a lookup in the arguments is a first-poll snapshot. `__inventory_visible`
-# and `__source_visible` are that snapshot and are kept for diagnostics only.
+# The poll predicate lives in `until`, which Ansible re-evaluates on every
+# attempt; `__inventory_visible` and `__source_visible` mirror the predicate
+# and are kept for diagnostics only.
 #
-# The predicate matches the object's parent (organization, and inventory for
-# sources) from the returned payload instead of trusting the list view's
-# filters, so a same-named object elsewhere cannot satisfy the wait. If the
-# object never appears, the block's rescue fails the play with a descriptive
-# message, so the dependent task never runs.
+# The predicate matches the object's name and parent (organization, and
+# inventory for sources) from the returned payload instead of trusting the
+# list view's filters, so a same-named object elsewhere cannot satisfy the
+# wait. Both sides of the parent comparison are stringified with `| string`:
+# the API serializes ids inconsistently (the organizations view returns
+# string ids, while the inventory view returns integer foreign keys), and a
+# raw `selectattr('organization', 'equalto', '2')` never matches the integer
+# 2. (List comprehensions are not usable here: Ansible's templar rejects
+# them with a syntax error.) If the object never appears, the block's rescue
+# fails the play with a descriptive message, so the dependent task never
+# runs.
 
+# The name is matched locally as well: if the list view ever ignores the
+# `name` query param, `first` would otherwise pick an arbitrary organization.
+# A missing organization makes `first` fail this named task.
 - name: Resolve the 20031 organization id
   ansible.builtin.set_fact:
-    __ascender_org_id: "{{ lookup('ctrliq.ascender.controller_api', 'organizations',
-                                  query_params={'name': '20031'},
-                                  wantlist=True) | map(attribute='id') | first }}"
+    __ascender_org_id: "{{ (lookup('ctrliq.ascender.controller_api', 'organizations',
+                                   query_params={'name': '20031'},
+                                   wantlist=True)
+                            | selectattr('name', 'equalto', '20031'))
+                            | map(attribute='id') | first }}"
 
 - name: Wait for 20031 Inventory to be visible in Ascender
   block:
     - name: Poll for 20031 Inventory visibility
       ansible.builtin.set_fact:
-        __inventory_visible: "{{ lookup('ctrliq.ascender.controller_api', 'inventories',
-                                        query_params={'name': '20031 Inventory'},
-                                        wantlist=True)
-                                 | selectattr('organization', 'equalto', __ascender_org_id) | list }}"
+        __inventory_visible: >-
+          {{ lookup('ctrliq.ascender.controller_api', 'inventories',
+                    query_params={'name': '20031 Inventory'}, wantlist=True)
+             | selectattr('name', 'equalto', '20031 Inventory')
+             | map(attribute='organization') | map('string')
+             | select('equalto', __ascender_org_id | string) | list }}
       register: __inventory_check
-      until: "lookup('ctrliq.ascender.controller_api', 'inventories',
-                     query_params={'name': '20031 Inventory'},
-                     wantlist=True)
-              | selectattr('organization', 'equalto', __ascender_org_id) | list | length > 0"
+      until: >-
+        lookup('ctrliq.ascender.controller_api', 'inventories',
+               query_params={'name': '20031 Inventory'}, wantlist=True)
+        | selectattr('name', 'equalto', '20031 Inventory')
+        | map(attribute='organization') | map('string')
+        | select('equalto', __ascender_org_id | string) | list | length > 0
       retries: 30
       delay: 2
   rescue:
@@ -60,27 +74,35 @@
     organization: "20031"
     update_on_launch: true
 
+# Resolved the way the collection's own modules resolve it: a server-side
+# name + organization filter (proven by the create tasks above), with the
+# name re-checked locally so a misbehaving filter cannot select an arbitrary
+# inventory of the organization.
 - name: Resolve the 20031 Inventory id
   ansible.builtin.set_fact:
-    __ascender_inventory_id: "{{ lookup('ctrliq.ascender.controller_api', 'inventories',
-                                        query_params={'name': '20031 Inventory'},
-                                        wantlist=True)
-                                 | selectattr('organization', 'equalto', __ascender_org_id)
-                                 | map(attribute='id') | first }}"
+    __ascender_inventory_id: "{{ (lookup('ctrliq.ascender.controller_api', 'inventories',
+                                          query_params={'name': '20031 Inventory',
+                                                        'organization': __ascender_org_id},
+                                          wantlist=True)
+                                  | selectattr('name', 'equalto', '20031 Inventory') | first).id }}"
 
 - name: Wait for 20031-source to be visible in Ascender
   block:
     - name: Poll for 20031-source visibility
       ansible.builtin.set_fact:
-        __source_visible: "{{ lookup('ctrliq.ascender.controller_api', 'inventory_sources',
-                                     query_params={'name': '20031-source'},
-                                     wantlist=True)
-                              | selectattr('inventory', 'equalto', __ascender_inventory_id) | list }}"
+        __source_visible: >-
+          {{ lookup('ctrliq.ascender.controller_api', 'inventory_sources',
+                    query_params={'name': '20031-source'}, wantlist=True)
+             | selectattr('name', 'equalto', '20031-source')
+             | map(attribute='inventory') | map('string')
+             | select('equalto', __ascender_inventory_id | string) | list }}
       register: __source_check
-      until: "lookup('ctrliq.ascender.controller_api', 'inventory_sources',
-                     query_params={'name': '20031-source'},
-                     wantlist=True)
-              | selectattr('inventory', 'equalto', __ascender_inventory_id) | list | length > 0"
+      until: >-
+        lookup('ctrliq.ascender.controller_api', 'inventory_sources',
+               query_params={'name': '20031-source'}, wantlist=True)
+        | selectattr('name', 'equalto', '20031-source')
+        | map(attribute='inventory') | map('string')
+        | select('equalto', __ascender_inventory_id | string) | list | length > 0
       retries: 30
       delay: 2
   rescue:
