@@ -6,6 +6,48 @@
     organization: "20031"
     state: present
 
+# The ctrliq.ascender create modules return as soon as the API accepts the POST
+# (201), before the new object is queryable. Every create is therefore followed
+# by a visibility wait that polls the list view (30 attempts x 2s) before the
+# next task looks the object up by name.
+#
+# The poll predicate lives in `until`, not in the task arguments: Ansible
+# re-templates `until` on every attempt but templates task arguments only once,
+# so a lookup in the arguments is a first-poll snapshot. `__inventory_visible`
+# and `__source_visible` are that snapshot and are kept for diagnostics only.
+#
+# The predicate matches the object's parent (organization, and inventory for
+# sources) from the returned payload instead of trusting the list view's
+# filters, so a same-named object elsewhere cannot satisfy the wait. If the
+# object never appears, the block's rescue fails the play with a descriptive
+# message, so the dependent task never runs.
+
+- name: Resolve the 20031 organization id
+  ansible.builtin.set_fact:
+    __ascender_org_id: "{{ lookup('ctrliq.ascender.controller_api', 'organizations',
+                                  query_params={'name': '20031'},
+                                  wantlist=True) | map(attribute='id') | first }}"
+
+- name: Wait for 20031 Inventory to be visible in Ascender
+  block:
+    - name: Poll for 20031 Inventory visibility
+      ansible.builtin.set_fact:
+        __inventory_visible: "{{ lookup('ctrliq.ascender.controller_api', 'inventories',
+                                        query_params={'name': '20031 Inventory'},
+                                        wantlist=True)
+                                 | selectattr('organization', 'equalto', __ascender_org_id) | list }}"
+      register: __inventory_check
+      until: "lookup('ctrliq.ascender.controller_api', 'inventories',
+                     query_params={'name': '20031 Inventory'},
+                     wantlist=True)
+              | selectattr('organization', 'equalto', __ascender_org_id) | list | length > 0"
+      retries: 30
+      delay: 2
+  rescue:
+    - name: Report 20031 Inventory visibility failure
+      ansible.builtin.fail:
+        msg: "20031 Inventory was not visible in organization 20031 after {{ __inventory_check.attempts | default(30) }} attempts"
+
 - name: Add 20031 inventory source
   ctrliq.ascender.inventory_source:
     name: "20031-source"
@@ -18,8 +60,36 @@
     organization: "20031"
     update_on_launch: true
 
+- name: Resolve the 20031 Inventory id
+  ansible.builtin.set_fact:
+    __ascender_inventory_id: "{{ lookup('ctrliq.ascender.controller_api', 'inventories',
+                                        query_params={'name': '20031 Inventory'},
+                                        wantlist=True)
+                                 | selectattr('organization', 'equalto', __ascender_org_id)
+                                 | map(attribute='id') | first }}"
+
+- name: Wait for 20031-source to be visible in Ascender
+  block:
+    - name: Poll for 20031-source visibility
+      ansible.builtin.set_fact:
+        __source_visible: "{{ lookup('ctrliq.ascender.controller_api', 'inventory_sources',
+                                     query_params={'name': '20031-source'},
+                                     wantlist=True)
+                              | selectattr('inventory', 'equalto', __ascender_inventory_id) | list }}"
+      register: __source_check
+      until: "lookup('ctrliq.ascender.controller_api', 'inventory_sources',
+                     query_params={'name': '20031-source'},
+                     wantlist=True)
+              | selectattr('inventory', 'equalto', __ascender_inventory_id) | list | length > 0"
+      retries: 30
+      delay: 2
+  rescue:
+    - name: Report 20031-source visibility failure
+      ansible.builtin.fail:
+        msg: "20031-source was not visible in inventory 20031 Inventory after {{ __source_check.attempts | default(30) }} attempts"
+
 - name: Update 2003 inventory
   ctrliq.ascender.inventory_source_update:
-    name: "20031 source"
+    name: "20031-source"
     inventory: "20031 Inventory"
     organization: "20031"
