@@ -84,7 +84,7 @@
     __wait_parent_id: "{{ __ascender_inventory_id }}"
     __wait_scope: "inventory 20031 Inventory"
 
-- name: Update 2003 inventory
+- name: Update 20031 inventory
   ctrliq.ascender.inventory_source_update:
     name: "20031-source"
     inventory: "20031 Inventory"
