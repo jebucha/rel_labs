@@ -1,0 +1,62 @@
+---
+# Shared visibility wait, parameterized per call site via include vars:
+#
+#   __wait_endpoint    list-view endpoint to poll (e.g. inventories)
+#   __wait_name        name of the object to wait for
+#   __wait_parent_attr payload attribute holding the parent reference
+#                      (organization or inventory)
+#   __wait_parent_id   the resolved parent id fact
+#   __wait_scope       phrase used in the failure message
+#                      (e.g. "organization 20031")
+#
+# The polling predicate lives in `until`, which Ansible re-evaluates on
+# every attempt, so the lookup issues a fresh API GET each poll; the include
+# vars referenced by the predicate are re-resolved on every poll for the
+# same reason. `__wait_visible` mirrors the predicate and is kept for
+# diagnostics only.
+#
+# The predicate matches the object's name and parent from the returned
+# payload instead of trusting the list view's filters, so a same-named
+# object elsewhere cannot satisfy the wait. The name is matched locally as
+# well: if the list view ever ignores the `name` query param, a bare parent
+# filter would otherwise select an arbitrary object. Both sides of the
+# parent comparison are stringified with `| string`: the API serializes ids
+# inconsistently (the organizations view returns string ids, while the
+# inventory view returns integer foreign keys), and a raw
+# `selectattr('organization', 'equalto', '2')` never matches the integer 2.
+# (List comprehensions are not usable here: Ansible's templar rejects them
+# with a syntax error.) If the object never appears, the rescue below fails
+# the play with a descriptive message, so the dependent task never runs.
+
+# The templated names intentionally carry the variable mid-name: they must
+# render byte-identically to the pre-extraction names, which the scenario
+# harness asserts on.
+- name: Wait for {{ __wait_name }} to be visible in Ascender  # noqa name[template]
+  block:
+    - name: Poll for {{ __wait_name }} visibility  # noqa name[template]
+      ansible.builtin.set_fact:
+        __wait_visible: >-
+          {{ lookup('ctrliq.ascender.controller_api', __wait_endpoint,
+                    query_params={'name': __wait_name}, wantlist=True)
+             | selectattr('name', 'equalto', __wait_name)
+             | map(attribute=__wait_parent_attr) | map('string')
+             | select('equalto', __wait_parent_id | string) | list }}
+      # __wait_check is deliberately shared across both call sites: each
+      # include registers into the parent scope under the same name, the
+      # second overwriting the first. This is safe: each block's rescue
+      # reads __wait_check.attempts only at its own failure, by which point
+      # the most recent registration is its own. Do not rename it
+      # per call site.
+      register: __wait_check
+      until: >-
+        lookup('ctrliq.ascender.controller_api', __wait_endpoint,
+               query_params={'name': __wait_name}, wantlist=True)
+        | selectattr('name', 'equalto', __wait_name)
+        | map(attribute=__wait_parent_attr) | map('string')
+        | select('equalto', __wait_parent_id | string) | list | length > 0
+      retries: 30
+      delay: 2
+  rescue:
+    - name: Report {{ __wait_name }} visibility failure  # noqa name[template]
+      ansible.builtin.fail:
+        msg: "{{ __wait_name }} was not visible in {{ __wait_scope }} after {{ __wait_check.attempts | default(30) }} attempts"
