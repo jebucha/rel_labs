@@ -1,0 +1,4 @@
+---
+# Runs the real control-plane entry point, unmodified (design D1): the
+# deployable unit is the thing under test.
+- import_playbook: ../../ascender_as_code.yml

@@ -1,0 +1,22 @@
+---
+# No-op by design (design D8): the live instance ends in the bootstrapped
+# steady state, which is the lab's desired end state — nothing is torn
+# down. The Molecule scenario state is reset so a repeat `molecule test -s
+# live` re-runs prepare (the destructive fresh-bootstrap arrangement)
+# instead of skipping it as "already prepared".
+- name: Cleanup — nothing to tear down on the live instance
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    molecule_state_file: "{{ lookup('ansible.builtin.env', 'MOLECULE_STATE_FILE') }}"
+  tasks:
+    - name: Note the no-op
+      ansible.builtin.debug:
+        msg: "live cleanup is a no-op: the lab Ascender stays in the bootstrapped steady state"
+
+    - name: Reset the Molecule scenario state (force prepare on the next run)
+      ansible.builtin.file:
+        path: "{{ molecule_state_file }}"
+        state: absent
+      when: molecule_state_file | length > 0

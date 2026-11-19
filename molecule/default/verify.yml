@@ -1,0 +1,117 @@
+---
+# Asserts the bootstrapped state against the (stub) Ascender API over plain
+# HTTP (design D6: the stub needs no auth). One set of assertions covers
+# every `default` scenario variant: the source's source_path is the
+# playbook's configured value in all of them (that is the -008 check), and
+# the parentage assertions hold whether the inventory was created by
+# converge (-001/-003/-004/-006) or pre-seeded (-002).
+#
+# Test Requirement IDs satisfied by this file (the spec's `File` fields point
+# here):
+#   T-ASCENDER-INVENTORY-BOOTSTRAP-001 — fresh run: inventory + source + update job + job template
+#   T-ASCENDER-INVENTORY-BOOTSTRAP-002 — MOLECULE_STUB_SEED=inventory (source attached to the pre-seeded inventory)
+#   T-ASCENDER-INVENTORY-BOOTSTRAP-003 — MOLECULE_STUB_INVENTORY_DELAY_SECONDS=3 (chain completes despite the delay)
+#   T-ASCENDER-INVENTORY-BOOTSTRAP-004 — MOLECULE_STUB_SOURCE_DELAY_SECONDS=3 (chain completes despite the delay)
+#   T-ASCENDER-INVENTORY-BOOTSTRAP-006 — update job resolved for 20031-source within 20031 Inventory
+#   T-ASCENDER-INVENTORY-BOOTSTRAP-008 — MOLECULE_STUB_SEED=stale-source (stale source_path patched back)
+# The -007 hook is the built-in idempotence step configured in
+# molecule/default/molecule.yml; -005 lives in molecule/exhaust/verify.yml.
+
+- name: Verify the bootstrapped state against the stub Ascender API
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    stub_api: "http://127.0.0.1:18071/api/v2"
+    organization_name: "20031"
+    inventory_name: "20031 Inventory"
+    source_name: "20031-source"
+    job_template_name: "deploy_prometheus_server"
+  tasks:
+    - name: Fetch the 20031 organization
+      ansible.builtin.uri:
+        url: "{{ stub_api }}/organizations/?name={{ organization_name }}"
+        method: GET
+      register: orgs
+
+    - name: Set the organization id fact
+      ansible.builtin.set_fact:
+        org_id: >-
+          {{ (orgs.json.results
+              | selectattr('name', 'equalto', organization_name) | first).id | string }}
+
+    - name: Fetch the inventory
+      ansible.builtin.uri:
+        url: "{{ stub_api }}/inventories/?name={{ inventory_name | urlencode }}&organization={{ org_id }}"
+        method: GET
+      register: inventories
+
+    - name: Set the inventory fact
+      ansible.builtin.set_fact:
+        inventory: >-
+          {{ inventories.json.results
+             | selectattr('name', 'equalto', inventory_name)
+             | first | default({}) }}
+
+    - name: Fetch the inventory source
+      ansible.builtin.uri:
+        url: "{{ stub_api }}/inventory_sources/?name={{ source_name | urlencode }}&inventory={{ inventory.id | default('') }}"
+        method: GET
+      register: sources
+
+    - name: Set the source fact
+      ansible.builtin.set_fact:
+        source: >-
+          {{ sources.json.results
+             | selectattr('name', 'equalto', source_name)
+             | first | default({}) }}
+
+    - name: Fetch the jobs
+      ansible.builtin.uri:
+        url: "{{ stub_api }}/jobs/"
+        method: GET
+      register: jobs
+
+    - name: Set the update job fact
+      ansible.builtin.set_fact:
+        update_job: >-
+          {{ jobs.json.results
+             | selectattr('inventory_source', 'defined')
+             | selectattr('inventory_source', 'equalto', source.id | default(''))
+             | first | default({}) }}
+
+    - name: Fetch the job template
+      ansible.builtin.uri:
+        url: "{{ stub_api }}/job_templates/?name={{ job_template_name | urlencode }}&organization={{ org_id }}"
+        method: GET
+      register: job_templates
+
+    - name: Set the job template fact
+      ansible.builtin.set_fact:
+        job_template: >-
+          {{ job_templates.json.results
+             | selectattr('name', 'equalto', job_template_name)
+             | first | default({}) }}
+
+    - name: Assert the bootstrapped state
+      ansible.builtin.assert:
+        that:
+          - org_id | length > 0
+          # -001/-002/-003/-004/-006: inventory exists and belongs to org 20031.
+          - inventory.name == inventory_name
+          - inventory.organization | string == org_id
+          # -001/-002/-003/-004/-006: source exists, under the inventory, with the configured path.
+          - source.name == source_name
+          - source.inventory | string == inventory.id | string
+          # -008: the stale seeded source_path was patched back to the configured value.
+          - source.source_path == 'inventory/hosts.yml'
+          # -001/-002/-003/-004/-006/-008: an update job was triggered and did not fail.
+          - update_job.id is defined
+          - update_job.status not in ['failed', 'error']
+          # -001: light existence check for the job-template task (contract not yet spec'd).
+          - job_template.name == job_template_name
+          - job_template.job_type == 'run'
+        fail_msg: >-
+          Bootstrapped state is wrong: org_id={{ org_id }}
+          inventory={{ inventory }} source={{ source }}
+          update_job={{ update_job }} job_template={{ job_template }}

@@ -1,0 +1,43 @@
+---
+# The real entry point is deliberately not used here (design D5): in
+# ascender_as_code.yml the job-template task follows the inventory chain and
+# is unreachable once the chain fails, so this narrower wrapper matches the
+# scenario's contract. The expected failure is captured into a state file
+# under the repo-local .molecule/ state directory so `molecule test` exits
+# 0 and verify.yml can assert on it.
+- name: Converge — the source visibility wait must exhaust its budget
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    exhaust_state_file: >-
+      {{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/.molecule/{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_NAME') }}/exhaust_state.yml
+  tasks:
+    - name: Remove a capture from a previous run
+      ansible.builtin.file:
+        path: "{{ exhaust_state_file }}"
+        state: absent
+
+    - name: Run the inventory bootstrap chain (expected to fail on the source visibility wait)
+      block:
+        - name: Import the inventory bootstrap chain
+          ansible.builtin.import_tasks: ../../build_inventory.yml
+      rescue:
+        # The recorded message is the failure the chain actually reported
+        # (`ansible_failed_result` is the failed task's result — here the
+        # shared wait's `fail` in tasks/wait_visible.yml), not a string
+        # reconstructed from the expected outcome: an unrelated failure in
+        # the chain must be captured as-is and then fail verify, instead of
+        # being relabelled as the expected visibility-exhaustion message.
+        # `__wait_check` is the registered result of the failed poll task
+        # (the shared wait's set_fact, inside the imported chain); its
+        # `attempts` is the observed retry count.
+        - name: Record the failure the shared visibility wait reported
+          ansible.builtin.copy:
+            content: |
+              # Captured by molecule/exhaust/converge.yml when the
+              # inventory bootstrap chain failed (expected, by design).
+              failed_task: {{ ansible_failed_task.name | default('') | to_json }}
+              msg: {{ ansible_failed_result.msg | default('') | to_json }}
+              attempts: {{ __wait_check.attempts | default(None) | to_json }}
+            dest: "{{ exhaust_state_file }}"

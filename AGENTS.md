@@ -2,6 +2,31 @@
 
 Guidance for AI coding agents working in this repository.
 
+## Test commands: control-plane playbooks (Molecule)
+
+This section covers the root-level Ascender control-plane playbooks
+(`ascender_as_code.yml`, `build_inventory.yml`) only; the other sections
+in this file describe a different stack. The scenarios live under
+`molecule/`; the two stub-backed ones run entirely locally in ~1 minute:
+
+```sh
+molecule test            # default scenario — happy path + idempotence re-run
+molecule test -s exhaust # never-visible source — exact failure contract
+```
+
+Molecule is pinned at 26.11.0 and installed with
+`uv tool install --python 3.13 "molecule==26.11.0" --with "ansible-core==2.19.11"`
+(same ansible-core as the repo's `ansible-playbook`); setup details are
+in `README.md` → Development.
+
+`molecule test -s live` is **destructive**: it deletes and re-bootstraps
+the 20031 objects on the lab Ascender. Only run it when intentionally
+testing against the lab — its `prepare` fails early unless
+`CONTROLLER_HOST` is in the allowlist in `molecule/live/prepare.yml` and
+live credentials (`CONTROLLER_OAUTH_TOKEN` or
+`CONTROLLER_USERNAME`/`CONTROLLER_PASSWORD`) are exported. The untracked
+`.env` file holds those credentials — never commit it.
+
 ## Python environment: always use uv
 
 This project's tooling was migrated to [uv](https://docs.astral.sh/uv/) (>= 0.13) and

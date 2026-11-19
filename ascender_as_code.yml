@@ -7,3 +7,19 @@
 
     - name: Include inventory task
       ansible.builtin.include_tasks: build_inventory.yml
+
+    - name: Deploy Prometheus Job Template
+      ctrliq.ascender.job_template:
+        name: deploy_prometheus_server
+        job_type: "run"
+        organization: "20031"
+        project: "rel_labs"
+        inventory: "20031 Inventory"
+        # Placeholder: the only playbook the lab project's (incomplete)
+        # list view currently accepts. The template's real target is
+        # deploy_prometheus.yml — to be finalized in the follow-up change
+        # that specs this task's contract.
+        playbook: "ascender_as_code.yml"
+        credentials:
+        allow_simultaneous: true
+        ask_credential_on_launch: true

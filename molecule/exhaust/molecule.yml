@@ -1,0 +1,41 @@
+---
+# Exhaust scenario (spec T-ASCENDER-INVENTORY-BOOTSTRAP-005): the stub
+# never returns the created inventory source in the list view, so the
+# shared visibility wait exhausts its 30x2s retry budget and the inventory
+# chain fails. converge.yml captures the expected failure (block/rescue,
+# design D5) so `molecule test` exits 0; verify.yml asserts the captured
+# message and that no update job was triggered.
+driver:
+  name: default
+  options:
+    managed: false
+    ansible_connection_options:
+      ansible_connection: local
+ansible:
+  env:
+    CONTROLLER_HOST: "http://127.0.0.1:18071"
+    CONTROLLER_USERNAME: "stub"
+    CONTROLLER_PASSWORD: "stub"
+    CONTROLLER_VERIFY_SSL: "false"
+    # The stub never returns created inventory sources in the list view
+    # (design D4); prepare starts the stub with this knob inherited.
+    MOLECULE_STUB_SOURCE_NEVER_VISIBLE: "1"
+  cfg:
+    defaults:
+      # Relative to the scenario directory (Molecule's working directory
+      # when it invokes ansible-playbook) — same resolution as the
+      # `default` scenario's molecule.yml, which documents the check.
+      collections_path: ../../collections
+  playbooks:
+    prepare: ../prepare_stub.yml
+    cleanup: ../cleanup_stub.yml
+verifier:
+  name: ansible
+scenario:
+  # No idempotence step: the run is expected to fail (and be captured).
+  test_sequence:
+    - syntax
+    - prepare
+    - converge
+    - verify
+    - cleanup

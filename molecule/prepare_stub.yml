@@ -1,0 +1,92 @@
+---
+# Shared stub lifecycle for the stub scenarios (default, exhaust), referenced
+# from each scenario's molecule.yml via `ansible.playbooks.prepare`.
+#
+# Starts molecule/stub_ascender.py detached on the fixed stub port, records
+# its PID under the repo-local .molecule/ state directory (gitignored), and
+# waits until the stub answers. A stale stub from a previous run is killed
+# first — only if its PID's cmdline identifies it as the stub, guarding
+# against a recycled PID. The stub inherits the provisioner environment, so
+# the MOLECULE_STUB_* knobs (set in a scenario's molecule.yml or exported by
+# the caller) shape its state for the run.
+- name: Prepare — start the stub Ascender
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    stub_port: 18071
+    stub_state_dir: >-
+      {{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/.molecule/{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_NAME') }}
+  tasks:
+    - name: Create the repo-local state directory
+      ansible.builtin.file:
+        path: "{{ stub_state_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Read a stale stub PID from a previous run
+      ansible.builtin.slurp:
+        src: "{{ stub_state_dir }}/stub_ascender.pid"
+      register: stub_pid_raw
+      failed_when: false
+
+    - name: Set the stale stub PID fact (empty when no PID file)
+      ansible.builtin.set_fact:
+        stale_stub_pid: >-
+          {{ (stub_pid_raw.content | b64decode | trim)
+             if stub_pid_raw.content is defined else '' }}
+
+    - name: Check the stale PID's cmdline (guards against a recycled PID)
+      ansible.builtin.shell: tr '\0' ' ' < /proc/{{ stale_stub_pid }}/cmdline
+      register: stale_stub_cmdline
+      changed_when: false
+      failed_when: false
+      when: stale_stub_pid | length > 0
+
+    - name: Kill the stale stub
+      ansible.builtin.shell: kill -TERM {{ stale_stub_pid }}
+      register: stale_stub_kill
+      changed_when: true
+      failed_when: false
+      when:
+        - stale_stub_pid | length > 0
+        - "'stub_ascender.py' in (stale_stub_cmdline.stdout | default(''))"
+
+    # If this waits out its retries, port {{ stub_port }} is already in use
+    # by another process and the stub cannot start: stop that process and
+    # re-run. (The stub's own log is {{ stub_state_dir }}/stub_ascender.log.)
+    - name: Wait for the stub port to be free (127.0.0.1:{{ stub_port }})
+      ansible.builtin.shell: >-
+        {{ ansible_playbook_python }} -c
+        "import socket,sys; s=socket.socket(); s.settimeout(0.2);
+        sys.exit(0 if s.connect_ex(('127.0.0.1', {{ stub_port }})) else 1)"
+      register: stub_port_free
+      until: stub_port_free.rc == 0
+      retries: 25
+      delay: 0.2
+      changed_when: false
+
+    - name: Start the stub Ascender (detached)
+      ansible.builtin.shell: |
+        nohup {{ ansible_playbook_python }} {{ playbook_dir }}/stub_ascender.py --port {{ stub_port }} \
+          >> "{{ stub_state_dir }}/stub_ascender.log" 2>&1 &
+        echo $!
+      register: stub_started
+      changed_when: true
+
+    - name: Record the stub PID
+      ansible.builtin.copy:
+        content: "{{ stub_started.stdout | trim }}\n"
+        dest: "{{ stub_state_dir }}/stub_ascender.pid"
+
+    # If this waits out its retries, the stub died at startup or a
+    # non-stub responder holds the port: see the stub log at
+    # {{ stub_state_dir }}/stub_ascender.log.
+    - name: Wait for the stub to answer on the port (127.0.0.1:{{ stub_port }})
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ stub_port }}/api/v2/organizations/"
+        method: GET
+      register: stub_ready
+      until: stub_ready.status | default(-1) == 200
+      retries: 25
+      delay: 0.2

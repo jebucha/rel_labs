@@ -1,0 +1,57 @@
+---
+# Arranges a fresh bootstrap state on the lab Ascender (design D8):
+# deletes the inventory source and the inventory (the state arrangement
+# ported from the retired harness's tests/scenario_state.yml) plus the
+# deploy_prometheus_server job template — a new destructive action the
+# retired harness never performed. Fails early and clearly unless
+# CONTROLLER_HOST names one of the lab hosts below, so a misconfigured
+# variable cannot point the deletions at an unintended instance.
+- name: Prepare — delete the bootstrapped objects on the lab Ascender
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    # The small lab-host allowlist (design D8): the only instance this
+    # scenario is allowed to mutate.
+    lab_hosts:
+      - "http://ascender.jebucha.com"
+    organization_name: "20031"
+    inventory_name: "20031 Inventory"
+    source_name: "20031-source"
+    job_template_name: "deploy_prometheus_server"
+    controller_host: "{{ lookup('ansible.builtin.env', 'CONTROLLER_HOST') }}"
+  tasks:
+    - name: Fail early unless CONTROLLER_HOST is a known lab host
+      ansible.builtin.assert:
+        that:
+          - controller_host | length > 0
+          - controller_host in lab_hosts
+        fail_msg: >-
+          The live scenario deletes the 20031 inventory, its
+          "20031-source" source, and the deploy_prometheus_server job
+          template on the instance named by CONTROLLER_HOST, and only
+          runs against the lab Ascender. Set CONTROLLER_HOST to one of
+          {{ lab_hosts | join(' or ') }} — plus live credentials
+          (CONTROLLER_USERNAME/CONTROLLER_PASSWORD or
+          CONTROLLER_OAUTH_TOKEN, and CONTROLLER_VERIFY_SSL).
+          CONTROLLER_HOST is {{ controller_host | default('<unset>') }}.
+        quiet: true
+
+    - name: Remove the inventory source
+      ctrliq.ascender.inventory_source:
+        name: "{{ source_name }}"
+        inventory: "{{ inventory_name }}"
+        organization: "{{ organization_name }}"
+        state: absent
+
+    - name: Remove the inventory
+      ctrliq.ascender.inventory:
+        name: "{{ inventory_name }}"
+        organization: "{{ organization_name }}"
+        state: absent
+
+    - name: Remove the deploy_prometheus_server job template
+      ctrliq.ascender.job_template:
+        name: "{{ job_template_name }}"
+        organization: "{{ organization_name }}"
+        state: absent

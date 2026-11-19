@@ -1,0 +1,43 @@
+---
+# Default scenario: full bootstrap plus a steady-state re-run against the
+# stub Ascender (molecule/stub_ascender.py, started by prepare). Covers spec
+# scenarios T-ASCENDER-INVENTORY-BOOTSTRAP-001, -003, -004, -006 and -007
+# (the idempotence step is -007); the -002 and -008 variants run this same
+# scenario with the stub's MOLECULE_STUB_* knobs exported by the caller
+# (see the spec's Test Requirement blocks).
+driver:
+  name: default
+  options:
+    managed: false
+    ansible_connection_options:
+      ansible_connection: local
+ansible:
+  env:
+    CONTROLLER_HOST: "http://127.0.0.1:18071"
+    CONTROLLER_USERNAME: "stub"
+    CONTROLLER_PASSWORD: "stub"
+    CONTROLLER_VERIFY_SSL: "false"
+  cfg:
+    defaults:
+      # Relative to the scenario directory, which is Molecule's working
+      # directory when it invokes ansible-playbook: resolves to the repo's
+      # vendored collection. Verified by running this scenario with the
+      # `collections` symlink below temporarily removed — it still
+      # resolved. The symlink is kept as a fallback for Ansible's
+      # playbook-adjacent collection scan (playbook_dir/collections).
+      collections_path: ../../collections
+  playbooks:
+    prepare: ../prepare_stub.yml
+    cleanup: ../cleanup_stub.yml
+verifier:
+  name: ansible
+scenario:
+  # No create/destroy: the default driver manages no infrastructure; the
+  # stub's lifecycle lives in prepare/cleanup.
+  test_sequence:
+    - syntax
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - cleanup

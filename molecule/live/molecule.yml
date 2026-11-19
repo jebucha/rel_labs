@@ -1,0 +1,40 @@
+---
+# Live scenario: a fresh bootstrap against the real lab Ascender (design
+# D8). The idempotence step covers the steady-state re-run on the real
+# API.
+#
+# DESTRUCTIVE BY DESIGN: prepare deletes the "20031 Inventory" inventory,
+# its "20031-source" source, and the deploy_prometheus_server job template
+# (the last one new — the retired harness never deleted it), so converge
+# performs a fresh bootstrap. The instance then ends in the bootstrapped
+# steady state, which is the lab's desired end state.
+#
+# GATED: prepare fails immediately unless CONTROLLER_HOST is set to one of
+# the lab hosts in prepare.yml. Credentials come from the caller's
+# environment (CONTROLLER_USERNAME/CONTROLLER_PASSWORD or
+# CONTROLLER_OAUTH_TOKEN, plus CONTROLLER_VERIFY_SSL) — this scenario sets
+# no CONTROLLER_* of its own, so an unauthenticated environment simply
+# cannot run it.
+driver:
+  name: default
+  options:
+    managed: false
+    ansible_connection_options:
+      ansible_connection: local
+ansible:
+  cfg:
+    defaults:
+      # Relative to the scenario directory (Molecule's working directory
+      # when it invokes ansible-playbook) — same resolution as the
+      # `default` scenario's molecule.yml, which documents the check.
+      collections_path: ../../collections
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    - syntax
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - cleanup

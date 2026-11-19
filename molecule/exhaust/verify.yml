@@ -1,0 +1,39 @@
+---
+# Asserts the captured exhaust failure (spec
+# T-ASCENDER-INVENTORY-BOOTSTRAP-005): the message matches the spec's exact
+# text, the full 30-attempt budget was used, and the (stub) Ascender API
+# shows no update job — the update task never ran because the dependent
+# task was blocked by the visibility wait.
+- name: Verify the captured exhaust failure
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    stub_api: "http://127.0.0.1:18071/api/v2"
+    exhaust_state_file: >-
+      {{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/.molecule/{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_NAME') }}/exhaust_state.yml
+  tasks:
+    - name: Read the captured failure
+      ansible.builtin.slurp:
+        src: "{{ exhaust_state_file }}"
+      register: exhaust_state_raw
+
+    - name: Set the captured failure fact
+      ansible.builtin.set_fact:
+        exhaust_state: "{{ exhaust_state_raw.content | b64decode | from_yaml }}"
+
+    - name: Fetch the jobs
+      ansible.builtin.uri:
+        url: "{{ stub_api }}/jobs/"
+        method: GET
+      register: jobs
+
+    - name: Assert the retry budget was exhausted exactly as specified
+      ansible.builtin.assert:
+        that:
+          - exhaust_state.failed_task | default('') == 'Report 20031-source visibility failure'
+          - exhaust_state.msg == '20031-source was not visible in inventory 20031 Inventory after 30 attempts'
+          - exhaust_state.attempts | int == 30
+          - jobs.json.results | length == 0
+        fail_msg: >-
+          Captured: {{ exhaust_state }}; jobs: {{ jobs.json.results }}

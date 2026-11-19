@@ -1,0 +1,90 @@
+---
+# Asserts the same bootstrapped state as the default scenario's verify, but
+# through the ctrliq.ascender.controller_api lookup — auth via the same
+# CONTROLLER_* environment the playbooks themselves use (design D6).
+- name: Verify the bootstrapped state on the live Ascender
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    organization_name: "20031"
+    inventory_name: "20031 Inventory"
+    source_name: "20031-source"
+    job_template_name: "deploy_prometheus_server"
+  tasks:
+    - name: Resolve the 20031 organization
+      ansible.builtin.set_fact:
+        org: >-
+          {{ lookup('ctrliq.ascender.controller_api', 'organizations',
+                    query_params={'name': organization_name}, wantlist=True)
+             | selectattr('name', 'equalto', organization_name)
+             | first | default({}) }}
+
+    - name: Assert the organization resolved
+      ansible.builtin.assert:
+        that:
+          - org.id is defined
+        fail_msg: >-
+          Organization {{ organization_name }} was not found on the live
+          Ascender; the bootstrapped state is wrong (org={{ org }})
+
+    - name: Resolve the inventory
+      ansible.builtin.set_fact:
+        inventory: >-
+          {{ lookup('ctrliq.ascender.controller_api', 'inventories',
+                    query_params={'name': inventory_name, 'organization': org.id},
+                    wantlist=True)
+             | selectattr('name', 'equalto', inventory_name)
+             | first | default({}) }}
+
+    - name: Resolve the inventory source
+      ansible.builtin.set_fact:
+        source: >-
+          {{ lookup('ctrliq.ascender.controller_api', 'inventory_sources',
+                    query_params={'name': source_name, 'inventory': inventory.id},
+                    wantlist=True)
+             | selectattr('name', 'equalto', source_name)
+             | first | default({}) }}
+
+    # On the real Ascender, an inventory source update's job record lives
+    # in the inventory_updates list view (the jobs list view only carries
+    # job-template launches) — the stub keeps it in its jobs view instead.
+    # Fetched unfiltered and matched locally (the same predicate style as
+    # the shared visibility wait): whether the endpoint honors an
+    # inventory_source filter is not part of the API contract the playbooks
+    # rely on.
+    # inventory_source on both sides is an integer on this API (the
+    # inventory_updates view and the inventory_sources view agree), so the
+    # comparison is raw: equalto in this ansible build does not coerce
+    # int-vs-string, and stringifying only one side never matches.
+    - name: Resolve the non-failed update jobs for the source
+      ansible.builtin.set_fact:
+        update_jobs: >-
+          {{ lookup('ctrliq.ascender.controller_api', 'inventory_updates', wantlist=True)
+             | selectattr('inventory_source', 'defined')
+             | selectattr('inventory_source', 'equalto', source.id)
+             | rejectattr('status', 'in', ['failed', 'error']) | list }}
+
+    - name: Resolve the job template
+      ansible.builtin.set_fact:
+        job_template: >-
+          {{ lookup('ctrliq.ascender.controller_api', 'job_templates',
+                    query_params={'name': job_template_name, 'organization': org.id},
+                    wantlist=True)
+             | selectattr('name', 'equalto', job_template_name)
+             | first | default({}) }}
+
+    - name: Assert the bootstrapped state
+      ansible.builtin.assert:
+        that:
+          - inventory.name == inventory_name
+          - inventory.organization | string == org.id | string
+          - source.name == source_name
+          - source.inventory | string == inventory.id | string
+          - source.source_path == 'inventory/hosts.yml'
+          - update_jobs | length > 0
+          - job_template.name == job_template_name
+        fail_msg: >-
+          Bootstrapped state is wrong: inventory={{ inventory }}
+          source={{ source }} update_jobs={{ update_jobs }}
+          job_template={{ job_template }}

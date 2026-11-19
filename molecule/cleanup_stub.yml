@@ -1,0 +1,75 @@
+---
+# Shared stub teardown for the stub scenarios (default, exhaust), referenced
+# from each scenario's molecule.yml via `ansible.playbooks.cleanup`.
+#
+# Kills the stub started by prepare_stub.yml — only if the PID file's process
+# cmdline identifies it as the stub, guarding against a recycled PID — and
+# waits for it to exit. The stub log is kept under the repo-local .molecule/
+# state directory for debugging.
+- name: Cleanup — stop the stub Ascender
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    stub_state_dir: >-
+      {{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/.molecule/{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_NAME') }}
+    molecule_state_file: "{{ lookup('ansible.builtin.env', 'MOLECULE_STATE_FILE') }}"
+  tasks:
+    - name: Read the stub PID recorded by prepare
+      ansible.builtin.slurp:
+        src: "{{ stub_state_dir }}/stub_ascender.pid"
+      register: stub_pid_raw
+      failed_when: false
+
+    - name: Set the stub PID fact (empty when no PID file)
+      ansible.builtin.set_fact:
+        stub_pid: >-
+          {{ (stub_pid_raw.content | b64decode | trim)
+             if stub_pid_raw.content is defined else '' }}
+
+    - name: Check the PID's cmdline (guards against a recycled PID)
+      ansible.builtin.shell: tr '\0' ' ' < /proc/{{ stub_pid }}/cmdline
+      register: stub_cmdline
+      changed_when: false
+      failed_when: false
+      when: stub_pid | length > 0
+
+    - name: Stop the stub
+      ansible.builtin.shell: kill -TERM {{ stub_pid }}
+      register: stub_kill
+      changed_when: true
+      failed_when: false
+      when:
+        - stub_pid | length > 0
+        - "'stub_ascender.py' in (stub_cmdline.stdout | default(''))"
+
+    # Probes for the process's *absence* (test exits 0 when /proc/<pid> is
+    # gone). This build's retry loop reports the task failed when `until` is
+    # satisfied by a failing run (the `kill -0` / `until: rc != 0` form), so
+    # the wait must break on a *successful* run instead.
+    - name: Wait for the stub to exit
+      ansible.builtin.command: "test ! -d /proc/{{ stub_pid }}"
+      register: stub_gone
+      until: stub_gone.rc == 0
+      retries: 25
+      delay: 0.2
+      changed_when: false
+      when: stub_kill is changed
+
+    - name: Remove the PID file
+      ansible.builtin.file:
+        path: "{{ stub_state_dir }}/stub_ascender.pid"
+        state: absent
+      when: stub_pid | length > 0
+
+    # Molecule persists the scenario state (prepared/converged) in the state
+    # file and skips `prepare` on a later run when it says the scenario is
+    # already prepared. That would leave the next run without a stub (this
+    # cleanup just killed it) and with the previous run's MOLECULE_STUB_*
+    # knobs, so the state is reset and every `molecule test` starts a fresh
+    # stub. The file is recreated with fresh values if Molecule needs it.
+    - name: Reset the Molecule scenario state (force prepare on the next run)
+      ansible.builtin.file:
+        path: "{{ molecule_state_file }}"
+        state: absent
+      when: molecule_state_file | length > 0
