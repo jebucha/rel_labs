@@ -21,5 +21,8 @@
         # that specs this task's contract.
         playbook: "ascender_as_code.yml"
         credentials:
+          - ascender_machine_key
         allow_simultaneous: true
         ask_credential_on_launch: true
+        ask_job_type_on_launch: true
+        ask_limit_on_launch: true
