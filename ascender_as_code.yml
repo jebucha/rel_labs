@@ -70,19 +70,19 @@
               variable: "libvirt_vm_memory_mb"
               type: "integer"
               required: true
-              default: "2"
+              default: 2
             - question_name: "Vcpu Count"
               question_description: "How many CPUs"
               variable: "libvirt_vm_vcpus"
               type: "integer"
               required: true
-              default: "2"
+              default: 2
             - question_name: "Disk Size"
               question_description: "Disk Size in GB"
               variable: "libvirt_vm_disk_gb"
               type: "integer"
               required: true
-              default: "30"
+              default: 30
             - question_name: "VM Bridge"
               question_description: "Bridge0 or Bridge1"
               variable: "libvirt_vm_bridge"
