@@ -49,7 +49,7 @@
               question_description: "Enter hostname for new VM"
               variable: "libvirt_vm_name"
               type: "text"
-              required: "true"
+              required: true
             - question_name: "VM State"
               question_description: "Create or Destroy"
               variable: "libvirt_vm_state"
@@ -57,31 +57,31 @@
               choices:
                 - "present"
                 - "absent"
-              required: "true"
+              required: true
               default: "present"
             - question_name: "Domain name"
               question_description: "Enter domain name"
               variable: "libvirt_vm_domain"
               type: "text"
-              required: "true"
+              required: true
               default: "jebucha.com"
             - question_name: "VM Memory"
               question_description: "Ram allocation in GB"
               variable: "libvirt_vm_memory_mb"
               type: "integer"
-              required: "true"
+              required: true
               default: "2"
             - question_name: "Vcpu Count"
               question_description: "How many CPUs"
               variable: "libvirt_vm_vcpus"
               type: "integer"
-              required: "true"
+              required: true
               default: "2"
             - question_name: "Disk Size"
               question_description: "Disk Size in GB"
               variable: "libvirt_vm_disk_gb"
               type: "integer"
-              required: "true"
+              required: true
               default: "30"
             - question_name: "VM Bridge"
               question_description: "Bridge0 or Bridge1"
@@ -90,5 +90,5 @@
               choices:
                 - "bridge0"
                 - "bridge1"
-              required: "true"
+              required: true
               default: "bridge0"
