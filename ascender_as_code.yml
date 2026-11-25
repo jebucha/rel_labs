@@ -53,7 +53,7 @@
             - question_name: "VM State"
               question_description: "Create or Destroy"
               variable: "libvirt_vm_state"
-              type: "multichoice"
+              type: "multiselect"
               choices:
                 - "present"
                 - "absent"
@@ -86,6 +86,9 @@
             - question_name: "VM Bridge"
               question_description: "Bridge0 or Bridge1"
               variable: "libvirt_vm_bridge"
-              type: "text"
+              type: "multiselect"
+              choices:
+                - "bridge0"
+                - "bridge1"
               required: "true"
               default: "bridge0"
