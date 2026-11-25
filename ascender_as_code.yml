@@ -22,6 +22,7 @@
         playbook: "ascender_as_code.yml"
         credentials:
           - ascender_machine_key
+          - ascender_api
         allow_simultaneous: true
         ask_credential_on_launch: true
         ask_job_type_on_launch: true
