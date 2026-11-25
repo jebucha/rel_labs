@@ -19,7 +19,7 @@
         # list view currently accepts. The template's real target is
         # deploy_prometheus.yml — to be finalized in the follow-up change
         # that specs this task's contract.
-        playbook: "ascender_as_code.yml"
+        playbook: "deploy_prometheus.yml"
         credentials:
           - ascender_machine_key
           - ascender_api
