@@ -49,7 +49,7 @@
               question_description: "Enter hostname for new VM"
               variable: "libvirt_vm_name"
               type: "text"
-              required: true
+              required: "true"
             - question_name: "VM State"
               question_description: "Create or Destroy"
               variable: "libvirt_vm_state"
@@ -57,7 +57,7 @@
               choices:
                 - "present"
                 - "absent"
-              required: true
+              required: "true"
               default: "present"
             - question_name: "Domain name"
               question_description: "Enter domain name"
