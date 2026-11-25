@@ -1,0 +1,30 @@
+#cloud-config
+{% set ns = namespace(users=[]) %}
+{% for u in _libvirt_vm_users %}
+{%   set entry = {
+       'name': u.name,
+       'shell': u.shell | default('/bin/bash'),
+       'lock_passwd': true,
+       'ssh_authorized_keys': u.ssh_authorized_keys
+     } %}
+{%   if u.groups | default([]) | length > 0 %}
+{%     set entry = entry | combine({'groups': u.groups}) %}
+{%   endif %}
+{%   if u.sudo | default('') | length > 0 %}
+{%     set entry = entry | combine({'sudo': u.sudo}) %}
+{%   endif %}
+{%   set ns.users = ns.users + [entry] %}
+{% endfor %}
+{% set cfg = {
+     'hostname': libvirt_vm_name,
+     'users': ns.users,
+     'ssh_pwauth': false,
+     'disable_root': true
+   } %}
+{% if libvirt_vm_domain | length > 0 %}
+{%   set cfg = cfg | combine({'fqdn': libvirt_vm_name ~ '.' ~ libvirt_vm_domain, 'prefer_fqdn_over_hostname': false}) %}
+{% endif %}
+{% if libvirt_vm_packages | length > 0 %}
+{%   set cfg = cfg | combine({'packages': libvirt_vm_packages}) %}
+{% endif %}
+{{ cfg | to_nice_yaml(indent=2, width=4096, sort_keys=false) }}

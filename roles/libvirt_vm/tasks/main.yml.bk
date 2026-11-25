@@ -1,0 +1,221 @@
+---
+# ---------------------------------------------------------------------------
+# Input handling and validation
+# ---------------------------------------------------------------------------
+
+# Internal var: set_fact can't override extra vars (how Ascender passes survey answers)
+- name: Resolve user list (survey YAML takes precedence)
+  ansible.builtin.set_fact:
+    _libvirt_vm_users: >-
+      {{ (libvirt_vm_users_yaml | from_yaml)
+         if (libvirt_vm_users_yaml | default('') | trim | length > 0)
+         else libvirt_vm_users }}
+    _libvirt_vm_key_regex: '^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521)|sk-(ssh-ed25519|ecdsa-sha2-nistp256)@openssh\.com)\s'
+
+- name: Validate common inputs
+  ansible.builtin.assert:
+    that:
+      - libvirt_vm_state in ['present', 'absent']
+      - libvirt_vm_name is string
+      - libvirt_vm_name is match('^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$')
+      - libvirt_vm_disk_path != libvirt_vm_template
+    fail_msg: >-
+      Invalid input: libvirt_vm_state must be present|absent, libvirt_vm_name must match
+      ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$ (got '{{ libvirt_vm_name }}'), and the VM disk
+      path must not be the template.
+    quiet: true
+
+- name: Validate create inputs
+  when: libvirt_vm_state == 'present'
+  ansible.builtin.assert:
+    that:
+      - libvirt_vm_memory_mb | int >= 1024
+      - libvirt_vm_vcpus | int >= 1
+      - libvirt_vm_disk_gb | int >= 20
+      - _libvirt_vm_users is sequence
+      - _libvirt_vm_users is not string
+      - _libvirt_vm_users | length > 0
+    fail_msg: >-
+      Need memory >= 1024 MiB, vcpus >= 1, disk >= 20 GiB (template size), and at least
+      one user in libvirt_vm_users / libvirt_vm_users_yaml.
+    quiet: true
+
+- name: Validate each user
+  when: libvirt_vm_state == 'present'
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.name is defined
+      - item.name is match('^[a-z_][a-z0-9_-]{0,31}$')
+      - item.ssh_authorized_keys is defined
+      - item.ssh_authorized_keys is sequence
+      - item.ssh_authorized_keys is not string
+      - item.ssh_authorized_keys | length > 0
+      - item.ssh_authorized_keys | select('match', _libvirt_vm_key_regex) | list | length == item.ssh_authorized_keys | length
+      - item.groups is not defined or (item.groups is sequence and item.groups is not string)
+    fail_msg: >-
+      User entry invalid: {{ item.name | default('<missing name>') }}. Each user needs a
+      lowercase POSIX name, a non-empty ssh_authorized_keys list of OpenSSH public keys,
+      and (optionally) groups as a list.
+    quiet: true
+  loop: "{{ _libvirt_vm_users }}"
+  loop_control:
+    label: "{{ item.name | default('<missing name>') }}"
+
+- name: List existing libvirt domains
+  community.libvirt.virt:
+    command: list_vms
+    uri: "{{ libvirt_vm_uri }}"
+  register: _libvirt_vm_domains
+  check_mode: false
+
+- name: Record whether VM exists
+  ansible.builtin.set_fact:
+    _libvirt_vm_exists: "{{ libvirt_vm_name in _libvirt_vm_domains.list_vms }}"
+
+# ---------------------------------------------------------------------------
+# state: present
+# ---------------------------------------------------------------------------
+
+- name: Create VM
+  when: libvirt_vm_state == 'present'
+  block:
+    - name: Fail if VM already exists
+      when: _libvirt_vm_exists and libvirt_vm_fail_if_exists | bool
+      ansible.builtin.fail:
+        msg: "VM '{{ libvirt_vm_name }}' already exists on {{ inventory_hostname }}."
+
+    - name: Check template image
+      ansible.builtin.stat:
+        path: "{{ libvirt_vm_template }}"
+      register: _libvirt_vm_template_stat
+
+    - name: Fail if template is missing
+      when: not _libvirt_vm_template_stat.stat.exists
+      ansible.builtin.fail:
+        msg: "Template not found: {{ libvirt_vm_template }}"
+
+    - name: Check for orphaned overlay disk
+      ansible.builtin.stat:
+        path: "{{ libvirt_vm_disk_path }}"
+      register: _libvirt_vm_disk_stat
+
+    - name: Fail if disk exists without a VM
+      when:
+        - not _libvirt_vm_exists
+        - _libvirt_vm_disk_stat.stat.exists
+      ansible.builtin.fail:
+        msg: >-
+          {{ libvirt_vm_disk_path }} exists but no VM '{{ libvirt_vm_name }}' is defined.
+          Remove it (or run with libvirt_vm_state=absent) before creating.
+
+    - name: Define and start VM from template (thin overlay)
+      when: not _libvirt_vm_exists
+      community.libvirt.virt_install:
+        name: "{{ libvirt_vm_name }}"
+        state: present
+        uri: "{{ libvirt_vm_uri }}"
+        import: true
+        memory: "{{ libvirt_vm_memory_mb | int }}"
+        vcpus: "{{ libvirt_vm_vcpus | int }}"
+        cpu:
+          model: "{{ libvirt_vm_cpu_model }}"
+        osinfo: "{{ libvirt_vm_osinfo }}"
+        autostart: "{{ libvirt_vm_autostart | bool }}"
+        disks:
+          - path: "{{ libvirt_vm_disk_path }}"
+            format: qcow2
+            size: "{{ libvirt_vm_disk_gb | int }}"
+            backing_store: "{{ libvirt_vm_template }}"
+            backing_format: qcow2
+            bus: virtio
+        networks:
+          - network: "{{ libvirt_vm_network }}"
+            model:
+              type: virtio
+        cloud_init:
+          meta_data: "{{ lookup('ansible.builtin.template', 'meta-data.j2') }}"
+          user_data: "{{ lookup('ansible.builtin.template', 'user-data.j2') }}"
+      register: _libvirt_vm_install
+
+    - name: Wait for DHCP lease
+      when:
+        - libvirt_vm_wait_for_ssh | bool
+        - not ansible_check_mode
+      ansible.builtin.command:
+        argv: [virsh, -c, "{{ libvirt_vm_uri }}", domifaddr, "{{ libvirt_vm_name }}", --source, lease]
+      register: _libvirt_vm_ifaddr
+      changed_when: false
+      until: _libvirt_vm_ifaddr.stdout is search('ipv4\s+\d+\.\d+\.\d+\.\d+')
+      retries: "{{ libvirt_vm_ip_retries | int }}"
+      delay: "{{ libvirt_vm_ip_delay | int }}"
+
+    - name: Extract VM IP address
+      when:
+        - libvirt_vm_wait_for_ssh | bool
+        - not ansible_check_mode
+      ansible.builtin.set_fact:
+        libvirt_vm_ip: "{{ _libvirt_vm_ifaddr.stdout | regex_search('ipv4\\s+(\\d+\\.\\d+\\.\\d+\\.\\d+)', '\\1') | first }}"
+
+    - name: Wait for SSH on VM
+      when:
+        - libvirt_vm_wait_for_ssh | bool
+        - not ansible_check_mode
+      ansible.builtin.wait_for:
+        host: "{{ libvirt_vm_ip }}"
+        port: 22
+        search_regex: OpenSSH
+        timeout: "{{ libvirt_vm_ssh_timeout | int }}"
+
+    - name: Publish VM details to Ascender workflow
+      when:
+        - libvirt_vm_wait_for_ssh | bool
+        - not ansible_check_mode
+      ansible.builtin.set_stats:
+        data:
+          libvirt_vm_name: "{{ libvirt_vm_name }}"
+          libvirt_vm_ip: "{{ libvirt_vm_ip }}"
+
+    - name: Report result
+      ansible.builtin.debug:
+        msg: >-
+          {{ libvirt_vm_name }}
+          {{ 'already existed (skipped)' if _libvirt_vm_exists else 'created' }}
+          {{ ('at ' ~ libvirt_vm_ip) if libvirt_vm_ip is defined else '' }}
+
+# ---------------------------------------------------------------------------
+# state: absent
+# ---------------------------------------------------------------------------
+
+- name: Destroy VM
+  when: libvirt_vm_state == 'absent'
+  block:
+    - name: Get VM power state
+      when: _libvirt_vm_exists
+      community.libvirt.virt:
+        name: "{{ libvirt_vm_name }}"
+        command: status
+        uri: "{{ libvirt_vm_uri }}"
+      register: _libvirt_vm_status
+      check_mode: false
+
+    - name: Power off VM
+      when:
+        - _libvirt_vm_exists
+        - _libvirt_vm_status.status != 'shutdown'
+      community.libvirt.virt:
+        name: "{{ libvirt_vm_name }}"
+        state: destroyed
+        uri: "{{ libvirt_vm_uri }}"
+
+    - name: Undefine VM
+      when: _libvirt_vm_exists
+      community.libvirt.virt:
+        name: "{{ libvirt_vm_name }}"
+        command: undefine
+        uri: "{{ libvirt_vm_uri }}"
+
+    - name: Remove overlay disk (template is never touched)
+      ansible.builtin.file:
+        path: "{{ libvirt_vm_disk_path }}"
+        state: absent

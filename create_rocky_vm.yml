@@ -1,0 +1,10 @@
+---
+# Ascender job templates:
+#   "Create VM"  -> extra vars: libvirt_vm_state: present
+#   "Destroy VM" -> extra vars: libvirt_vm_state: absent
+- name: Manage libvirt VM from Rocky 10 template
+  hosts: vm_hosts
+  become: true
+  gather_facts: false
+  roles:
+    - role: libvirt_vm

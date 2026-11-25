@@ -1,0 +1,48 @@
+---
+# present = create VM from template; absent = destroy VM and delete its overlay disk
+libvirt_vm_state: present
+
+# --- Identity ----------------------------------------------------------------
+libvirt_vm_name: ""                      # required; set via survey / extra vars
+libvirt_vm_domain: ""                    # optional; "lab.example" -> fqdn vm1.lab.example
+
+# --- Sizing ------------------------------------------------------------------
+libvirt_vm_memory_mb: 2048
+libvirt_vm_vcpus: 2
+libvirt_vm_disk_gb: 30                   # overlay size; must be >= template's 20G
+
+# --- Template / storage ------------------------------------------------------
+libvirt_vm_pool_dir: /vmstore/vms
+libvirt_vm_template: "{{ libvirt_vm_pool_dir }}/rocky10-template-10.3-20261112.0.qcow2"
+libvirt_vm_disk_path: "{{ libvirt_vm_pool_dir }}/{{ libvirt_vm_name }}.qcow2"
+
+# --- Platform ----------------------------------------------------------------
+libvirt_vm_uri: qemu:///system
+libvirt_vm_cpu_model: host-passthrough   # Rocky 10 requires x86-64-v3
+libvirt_vm_osinfo:
+  detect: true
+  require: false
+libvirt_vm_network: default              # libvirt network name
+libvirt_vm_autostart: false
+
+# --- Users (cloud-init) ------------------------------------------------------
+# Each entry: name (required), ssh_authorized_keys (required, list),
+#             groups (list, optional), sudo (string, optional), shell (optional)
+libvirt_vm_users: []
+
+# Ascender surveys can't send lists of dicts; a textarea with YAML text works.
+# If non-empty, it replaces libvirt_vm_users.
+libvirt_vm_users_yaml: ""
+
+# Extra packages installed by cloud-init on first boot
+libvirt_vm_packages: []
+
+# --- Post-create wait --------------------------------------------------------
+# DHCP-lease lookup works on libvirt NAT networks (e.g. "default"); disable for bridged networks.
+libvirt_vm_wait_for_ssh: true
+libvirt_vm_ip_retries: 30
+libvirt_vm_ip_delay: 5
+libvirt_vm_ssh_timeout: 300
+
+# Fail (true) or skip (false) when a VM with this name already exists
+libvirt_vm_fail_if_exists: true

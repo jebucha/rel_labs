@@ -1,8 +1,0 @@
-download_url: https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/ctrliq-ascender-25.6.3.tar.gz
-format_version: 1.0.0
-name: ascender
-namespace: ctrliq
-server: https://galaxy.ansible.com/api/
-signatures: []
-version: 25.6.3
-version_url: /api/content/published/v3/plugin/ansible/content/published/collections/index/ctrliq/ascender/versions/25.6.3/
